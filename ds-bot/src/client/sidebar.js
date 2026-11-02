@@ -582,8 +582,8 @@ export function TeamSidebar(props) {
     wideContent ? h(NeedsYou, {
       items: roster.needsYou ?? [],
       onOpen: id => actions.openSession(id),
-      onAnswer: (sessionId, questionId, label) => {
-        void Promise.resolve(actions.answerQuestion(sessionId, questionId, { selected: [label], custom: '' }))
+      onAnswer: (sessionId, questionId, answer) => {
+        void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer))
           .catch(error => actions.reportError?.(error, 'answer-question'))
       },
     }) : null,

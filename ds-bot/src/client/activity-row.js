@@ -13,6 +13,12 @@ import { t } from './i18n.js'
 
 const PHRASE_HOLD_MS = 800
 const drawPhrase = pool => t(pool[Math.min(pool.length - 1, Math.floor(Math.random() * pool.length))])
+// The tool and what it works on, so a call that runs for minutes says what it is doing
+// beside its clock: "Running shell commands · npm test · 1m 20s".
+const toolLabel = tool => {
+  if (tool.label === undefined || tool.label === null || tool.target === undefined || tool.target === '') return tool.label
+  return `${tool.label} · ${tool.target}`
+}
 export { reducedMotion }
 
 // A turn that streams text first and runs a tool after keeps its row once the
@@ -140,7 +146,7 @@ export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useL
     : moveAt !== 0 ? { key: 'move', label: t('Switching working folder'), state: 'thinking' }
       : inputAt > (tool?.at ?? 0)
         ? { key: `input:${inputAt}`, pool: PHRASES.thinking, state: 'thinking' }
-        : tool ? { key: tool.label ? `tool:${tool.label}` : 'working', label: tool.label, pool: PHRASES.working, state: tool.state ?? 'working' }
+        : tool ? { key: tool.label ? `tool:${tool.label}:${tool.target ?? ''}` : 'working', label: toolLabel(tool), pool: PHRASES.working, state: tool.state ?? 'working' }
           : { key: 'thinking', pool: PHRASES.thinking, state: 'thinking' }
   const [shown, setShown] = useState(null)
   const wantKey = want?.key ?? null

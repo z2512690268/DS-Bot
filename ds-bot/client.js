@@ -2107,6 +2107,35 @@ function isHiddenTurn(roster, sessionId, turn) {
   return (roster.exchangeTurns[sessionId] ?? []).includes(turn);
 }
 var toolName = (root) => root.name || root.call?.name;
+var TARGET_CHARS = 60;
+var oneLine = (value) => String(value ?? "").split(/[\r\n]/)[0].trim();
+var clipTarget = (value) => {
+  const line = oneLine(value);
+  return line.length > TARGET_CHARS ? `${line.slice(0, TARGET_CHARS - 1).trimEnd()}…` : line;
+};
+var fileName = (value) => {
+  const parts = oneLine(value).split("/").filter((part) => part !== "");
+  return parts.at(-1) ?? "";
+};
+var SHELL_TOOL = /bash|pwsh|powershell|terminal|shell|exec/i;
+var FILE_TOOL = /^(read|write|edit|cat|patch|apply)|_file$|_files$/i;
+var PAGE_TOOL = /fetch|browse|browser/i;
+var SEARCH_TOOL = /search|grep|glob|find|list_dir/i;
+function toolTarget(name, arg) {
+  if (typeof arg !== "function") return "";
+  const pick2 = (...keys) => {
+    for (const key of keys) {
+      const value = arg(key);
+      if (typeof value === "string" && value.trim() !== "") return value;
+    }
+    return void 0;
+  };
+  if (SHELL_TOOL.test(name)) return clipTarget(pick2("command", "description"));
+  if (FILE_TOOL.test(name)) return fileName(pick2("file_path", "path", "file"));
+  if (PAGE_TOOL.test(name)) return clipTarget(pick2("url", "query"));
+  if (SEARCH_TOOL.test(name)) return clipTarget(pick2("query", "pattern", "path"));
+  return "";
+}
 function toolArgs(root) {
   if (typeof root.args?.text === "function") {
     return { text: (key) => root.args.text(key) ?? void 0, value: (key) => typeof root.args.value === "function" ? root.args.value(key) : void 0 };
@@ -2591,6 +2620,10 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-answers{display:flex;flex-wrap:wrap;gap:4px;padding:0 6px 4px 18px}
 .bt-needs-answer{font:inherit;font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid color-mix(in srgb,var(--bt-accent) 35%,transparent);background:color-mix(in srgb,var(--bt-accent) 10%,transparent);color:var(--bt-accent);cursor:pointer}
 .bt-needs-answer:hover{background:color-mix(in srgb,var(--bt-accent) 20%,transparent)}
+.bt-needs-free{display:flex;align-items:center;gap:4px;flex:1 1 auto;min-width:0}
+.bt-needs-free input{flex:1 1 auto;min-width:0;font:inherit;font-size:11px;padding:2px 6px;border-radius:6px;border:1px solid color-mix(in srgb,var(--bt-ink) 18%,transparent);background:transparent;color:inherit}
+.bt-needs-send{font:inherit;font-size:11px;padding:2px 8px;border-radius:6px;border:1px solid color-mix(in srgb,var(--bt-accent) 40%,transparent);background:transparent;color:var(--bt-accent);cursor:pointer}
+.bt-needs-send:disabled{opacity:.4;cursor:default}
 
 /* Chromium ignores ::-webkit-scrollbar when scrollbar-width or scrollbar-color (inherited) is non-auto. */
 .bt-side:not(.bt-rail)>.bt-list{margin-right:-12px;scrollbar-gutter:stable;scrollbar-width:auto;scrollbar-color:auto}
@@ -9254,18 +9287,18 @@ function toolActivity(name, arg, findBot, self) {
     case "group_relay":
       return { relay: true, state: "orbit" };
     case "message_bot": {
-      const target = findBot(arg("to"));
-      return { label: target ? t("Asking {name}", { name: target.name }) : t("Asking another Bot"), state: "sending" };
+      const target2 = findBot(arg("to"));
+      return { label: target2 ? t("Asking {name}", { name: target2.name }) : t("Asking another Bot"), state: "sending" };
     }
     case "stop_bot": {
-      const target = findBot(arg("bot"));
-      return { label: target ? t("Stopping {name}", { name: target.name }) : t("Stopping another Bot"), state: "sending" };
+      const target2 = findBot(arg("bot"));
+      return { label: target2 ? t("Stopping {name}", { name: target2.name }) : t("Stopping another Bot"), state: "sending" };
     }
     case "create_bot":
       return { label: t("Creating {name}", { name: arg("name") ?? t("a Bot") }), state: "sending" };
     case "update_bot": {
-      const target = findBot(arg("name")) ?? findBot(arg("bot")) ?? (arg("bot") ? void 0 : self);
-      return { label: t("Updating {name}", { name: target?.name ?? t("a Bot") }), state: "sending" };
+      const target2 = findBot(arg("name")) ?? findBot(arg("bot")) ?? (arg("bot") ? void 0 : self);
+      return { label: t("Updating {name}", { name: target2?.name ?? t("a Bot") }), state: "sending" };
     }
     case "list_bots":
       return { label: t("Checking the team"), state: "searching" };
@@ -9282,7 +9315,8 @@ function toolActivity(name, arg, findBot, self) {
     default:
       if (GROUP_PHRASES[name]) return { label: t(GROUP_PHRASES[name]), state: "sending" };
       const phrase = TOOL_PHRASES.find(([pattern]) => pattern.test(name))?.[1];
-      return { label: phrase ? t(phrase) : null, state: toolState(name) };
+      const target = toolTarget(name, arg);
+      return { label: phrase ? t(phrase) : null, ...target === "" ? {} : { target }, state: toolState(name) };
   }
 }
 function workPhrase(doing) {
@@ -9571,6 +9605,10 @@ var import_react20 = require("react");
 var import_react_dom2 = require("react-dom");
 var PHRASE_HOLD_MS = 800;
 var drawPhrase = (pool) => t(pool[Math.min(pool.length - 1, Math.floor(Math.random() * pool.length))]);
+var toolLabel = (tool) => {
+  if (tool.label === void 0 || tool.label === null || tool.target === void 0 || tool.target === "") return tool.label;
+  return `${tool.label} · ${tool.target}`;
+};
 var rowVisible = ({ running, streaming, tools, relaying, bot, room: room2 }) => running && (!streaming || tools.length > 0) && !relaying && (bot !== void 0 || room2 !== void 0);
 var freshInputAt = (submissions, steeredAt) => Math.max(
   0,
@@ -9685,7 +9723,7 @@ function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, us
   const inputRef = (0, import_react20.useRef)(0);
   const inputAt = Math.max(inputRef.current, pendingInput);
   inputRef.current = inputAt;
-  const want = !visible ? null : moveAt !== 0 ? { key: "move", label: t("Switching working folder"), state: "thinking" } : inputAt > (tool?.at ?? 0) ? { key: `input:${inputAt}`, pool: PHRASES.thinking, state: "thinking" } : tool ? { key: tool.label ? `tool:${tool.label}` : "working", label: tool.label, pool: PHRASES.working, state: tool.state ?? "working" } : { key: "thinking", pool: PHRASES.thinking, state: "thinking" };
+  const want = !visible ? null : moveAt !== 0 ? { key: "move", label: t("Switching working folder"), state: "thinking" } : inputAt > (tool?.at ?? 0) ? { key: `input:${inputAt}`, pool: PHRASES.thinking, state: "thinking" } : tool ? { key: tool.label ? `tool:${tool.label}:${tool.target ?? ""}` : "working", label: toolLabel(tool), pool: PHRASES.working, state: tool.state ?? "working" } : { key: "thinking", pool: PHRASES.thinking, state: "thinking" };
   const [shown, setShown] = (0, import_react20.useState)(null);
   const wantKey = want?.key ?? null;
   const markState = (0, import_react20.useRef)("thinking");
@@ -9989,6 +10027,60 @@ var lineOf = (item) => {
   if (item.kind === "answer") return item.question ?? "";
   return item.summary ?? item.detail ?? "";
 };
+function AnswerBox({ item, onAnswer }) {
+  const [text, setText] = (0, import_react21.useState)("");
+  const options = Array.isArray(item.options) ? item.options.slice(0, 3) : [];
+  const send = (answer) => {
+    if (item.sessionId === void 0 || item.questionId === void 0) return;
+    onAnswer?.(item.sessionId, item.questionId, answer);
+  };
+  const submit = () => {
+    const custom = text.trim();
+    if (custom === "") return;
+    send({ selected: [], custom });
+    setText("");
+  };
+  return (0, import_react21.createElement)(
+    "div",
+    { className: "bt-needs-answers" },
+    options.map((option) => (0, import_react21.createElement)("button", {
+      key: option.label,
+      type: "button",
+      className: "bt-needs-answer",
+      onClick: (event) => {
+        event.stopPropagation();
+        send({ selected: [option.label], custom: "" });
+      }
+    }, option.label)),
+    item.allowCustom === false ? null : (0, import_react21.createElement)(
+      "span",
+      { className: "bt-needs-free" },
+      (0, import_react21.createElement)("input", {
+        type: "text",
+        value: text,
+        placeholder: zh() ? "自己写…" : "Write your own…",
+        "aria-label": zh() ? "自己写一个回答" : "Write your own answer",
+        onChange: (event) => setText(event.target.value),
+        onKeyDown: (event) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          event.stopPropagation();
+          submit();
+        },
+        onClick: (event) => event.stopPropagation()
+      }),
+      (0, import_react21.createElement)("button", {
+        type: "button",
+        className: "bt-needs-send",
+        disabled: text.trim() === "",
+        onClick: (event) => {
+          event.stopPropagation();
+          submit();
+        }
+      }, zh() ? "发送" : "Send")
+    )
+  );
+}
 function NeedsYou({ items, onOpen, onAnswer }) {
   if (!Array.isArray(items) || items.length === 0) return null;
   const shown = items.slice(0, 4);
@@ -10005,44 +10097,27 @@ function NeedsYou({ items, onOpen, onAnswer }) {
     (0, import_react21.createElement)(
       "ul",
       { className: "bt-needs-list" },
-      shown.map((item, index) => {
-        const options = item.kind === "answer" && Array.isArray(item.options) ? item.options.slice(0, 3) : [];
-        return (0, import_react21.createElement)(
-          "li",
-          { key: `${item.kind}-${item.work ?? item.questionId ?? index}` },
-          (0, import_react21.createElement)(
-            "button",
-            {
-              type: "button",
-              className: "bt-needs-row",
-              "data-kind": item.kind,
-              title: [item.bot, lineOf(item)].filter(Boolean).join(" · "),
-              onClick: () => {
-                if (item.botId !== void 0) onOpen?.(item.botId);
-              }
-            },
-            (0, import_react21.createElement)("span", { className: "bt-needs-mark", "aria-hidden": true }),
-            (0, import_react21.createElement)("span", { className: "bt-needs-kind" }, kindOf(item.kind)),
-            (0, import_react21.createElement)("span", { className: "bt-needs-text" }, lineOf(item)),
-            item.bot === void 0 ? null : (0, import_react21.createElement)("span", { className: "bt-needs-bot" }, item.bot)
-          ),
-          options.length === 0 ? null : (0, import_react21.createElement)(
-            "div",
-            { className: "bt-needs-answers" },
-            options.map((option) => (0, import_react21.createElement)("button", {
-              key: option.label,
-              type: "button",
-              className: "bt-needs-answer",
-              onClick: (event) => {
-                event.stopPropagation();
-                if (item.sessionId !== void 0 && item.questionId !== void 0) {
-                  onAnswer?.(item.sessionId, item.questionId, option.label);
-                }
-              }
-            }, option.label))
-          )
-        );
-      })
+      shown.map((item, index) => (0, import_react21.createElement)(
+        "li",
+        { key: `${item.kind}-${item.work ?? item.questionId ?? index}` },
+        (0, import_react21.createElement)(
+          "button",
+          {
+            type: "button",
+            className: "bt-needs-row",
+            "data-kind": item.kind,
+            title: [item.bot, lineOf(item)].filter(Boolean).join(" · "),
+            onClick: () => {
+              if (item.botId !== void 0) onOpen?.(item.botId);
+            }
+          },
+          (0, import_react21.createElement)("span", { className: "bt-needs-mark", "aria-hidden": true }),
+          (0, import_react21.createElement)("span", { className: "bt-needs-kind" }, kindOf(item.kind)),
+          (0, import_react21.createElement)("span", { className: "bt-needs-text" }, lineOf(item)),
+          item.bot === void 0 ? null : (0, import_react21.createElement)("span", { className: "bt-needs-bot" }, item.bot)
+        ),
+        item.kind === "answer" ? (0, import_react21.createElement)(AnswerBox, { key: "answers", item, onAnswer }) : null
+      ))
     ),
     more > 0 ? (0, import_react21.createElement)("div", { className: "bt-needs-more" }, zh() ? `还有 ${more} 条` : `${more} more`) : null
   );
@@ -10636,8 +10711,8 @@ function TeamSidebar(props) {
     wideContent ? (0, import_react22.createElement)(NeedsYou, {
       items: roster.needsYou ?? [],
       onOpen: (id) => actions.openSession(id),
-      onAnswer: (sessionId, questionId, label) => {
-        void Promise.resolve(actions.answerQuestion(sessionId, questionId, { selected: [label], custom: "" })).catch((error) => actions.reportError?.(error, "answer-question"));
+      onAnswer: (sessionId, questionId, answer) => {
+        void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer)).catch((error) => actions.reportError?.(error, "answer-question"));
       }
     }) : null,
     (0, import_react22.createElement)(
@@ -19900,7 +19975,7 @@ function readPage(limits) {
   const expand = (text2) => text2.replace(/\u0001(\d+)[\u0002\u0003]/g, (_, index) => expand(stash[Number(index)]));
   const flow = (text2) => text2.split("\n").map((line) => line.replace(/[ \t\f\v\u00a0\u2028\u2029]+/g, " ").trim().replace(/^· /, "")).join("\n").replace(/\n{3,}/g, "\n\n").replace(/\u0003\n\n(?=\u0001\d+\u0003)/g, "\n").trim();
   const block = (text2) => expand(flow(text2));
-  const oneLine = (text2) => block(text2).replace(/\s*\n+\s*/g, " ").trim();
+  const oneLine2 = (text2) => block(text2).replace(/\s*\n+\s*/g, " ").trim();
   const styleOf = (el) => (el.ownerDocument.defaultView || window).getComputedStyle(el);
   const childrenOf = (el) => {
     if (el.shadowRoot) return el.shadowRoot.childNodes;
@@ -19979,7 +20054,7 @@ ${fence}`;
   };
   const tableMarkdown = (table, ctx) => {
     const rows2 = [...table.rows].filter((row) => styleOf(row).display !== "none");
-    const caption = table.caption ? oneLine(children(table.caption, ctx)) : "";
+    const caption = table.caption ? oneLine2(children(table.caption, ctx)) : "";
     if (layoutTable(table, rows2)) {
       return rows2.map((row) => [...row.cells].map((cell) => `
 
@@ -20128,10 +20203,10 @@ ${body2 || "(no text)"}
     } else {
       body2 = children(el, { ...next, pre: keepsSpace });
     }
-    if (found) found.item.name = nameOf(el, oneLine(body2), found.secret);
+    if (found) found.item.name = nameOf(el, oneLine2(body2), found.secret);
     const level = /^h([1-6])$/.exec(tag)?.[1] || (el.getAttribute("role") === "heading" ? el.getAttribute("aria-level") || "2" : "");
     if (level) {
-      const title = oneLine(body2);
+      const title = oneLine2(body2);
       return title ? `
 
 ${"#".repeat(Math.min(6, Number(level) || 2))} ${title}${mark}
@@ -20139,7 +20214,7 @@ ${"#".repeat(Math.min(6, Number(level) || 2))} ${title}${mark}
 ` : mark;
     }
     if (tag === "code" && !ctx.pre) {
-      const code = oneLine(body2);
+      const code = oneLine2(body2);
       if (!code) return mark;
       const ticks = code.includes("`") ? "``" : "`";
       return `${ticks}${code}${ticks}${mark}`;
