@@ -1055,17 +1055,17 @@ export function install(rt) {
   // A message that waits for the next turn is answered at once. Follow-up delivery
   // wakes a Session by itself; when the Session was finishing a turn or doing its
   // upkeep, the wake can be missed, and the message then sits in the chat until
-  // something else starts a turn. Each message is woken once, so this cannot loop.
+  // something else starts a turn. Waking the driver never re-sends the message: a
+  // second copy would reach the model twice and show up as queued input. Each
+  // message is woken once, so this cannot loop.
   const woken = new Set()
   ctx.on('agent/status', ({ agent, status }) => {
     if (status !== 'idle' || agent === undefined || rt.live.get(agent.id)?.turn !== undefined) return
-    const queued = [...(agent.inbox?.nextTurn ?? [])].filter(message => !woken.has(message.id))
-    const next = queued[0]
+    const next = [...(agent.inbox?.nextTurn ?? [])].find(message => !woken.has(message.id))
     if (next === undefined) return
     woken.add(next.id)
     try {
-      agent.inbox.remove(next.id)
-      agent.send(next, 'next-turn', true)
+      agent.wakeDriver?.()
     } catch (error) {
       rt.warn('ds-bot: waiting message in %s not woken: %s', agent.id, error)
     }
