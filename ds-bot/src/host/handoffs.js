@@ -413,6 +413,7 @@ export function install(rt) {
       const botId = rt.selfOf?.(sessionId)
       items.push({
         kind: 'answer',
+        botId,
         bot: rt.botOf(botId)?.name,
         question: question.question,
         since: question.askedAt,
@@ -424,6 +425,7 @@ export function install(rt) {
       if (!waitsForUser(workStateValue.state)) continue
       items.push({
         kind: workStateValue.state === 'person/review' ? 'review' : 'blocked',
+        botId: work.from,
         bot: rt.botOf(work.from)?.name,
         work: id,
         since: workStateValue.since,

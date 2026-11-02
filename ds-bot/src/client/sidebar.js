@@ -14,6 +14,7 @@ import { clientErrors } from './diagnostics.js'
 import { showsDshRow } from './dsh-offer.js'
 import { frameLayout, dragColumn, RAIL_WIDTH, FALLBACK_SIDEBAR_WIDTH, userSidebarToggle } from './frame-layout.js'
 import { chatRoom, dshCollapsed } from './frame-watch.js'
+import { NeedsYou } from './need-you.js'
 
 // -------------------------------------------------------------------------
 // Sidebar
@@ -577,6 +578,8 @@ export function TeamSidebar(props) {
   const content = h('div', { className: wideContent ? 'bt-side' : 'bt-side bt-rail', onKeyDown: typeToSearch },
     top,
     wideContent && roster.readOnly ? h('div', { className: 'bt-hint bt-read-only', role: 'status' }, hostText(roster.readOnly)) : null,
+    // What waits for the user, above the team: a healthy team shows nothing here.
+    wideContent ? h(NeedsYou, { items: roster.needsYou ?? [], onOpen: id => actions.openSession(id) }) : null,
     h('div', { ref: listRef, className: 'bt-list', role: 'region', 'aria-label': t('Bot list') },
       wideContent ? (main ? h(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : h('div', { className: 'bt-hint' }, uiNow.bootFailed ? bootHint() : t('Setting up your Main Bot…'))) : null,
       order.map(entry => (entry.kind === 'bot'

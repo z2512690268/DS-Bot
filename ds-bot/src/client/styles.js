@@ -124,6 +124,21 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-round:hover{background:var(--bt-hover)}
 .bt-round:active{transform:scale(.94)}
 .bt-list{display:flex;flex-direction:column;gap:3px;overflow-y:auto;min-height:0;flex:1 1 auto}
+.bt-needs{display:flex;flex-direction:column;gap:4px;margin:8px 6px 2px;padding:8px;border-radius:12px;background:color-mix(in srgb,var(--bt-ink) 4%,transparent);border:1px solid color-mix(in srgb,var(--bt-ink) 10%,transparent)}
+.bt-needs-head{display:flex;align-items:center;gap:6px;font-size:11px;letter-spacing:.02em;color:color-mix(in srgb,var(--bt-ink) 62%,transparent);text-transform:none}
+.bt-needs-title{font-weight:600;color:color-mix(in srgb,var(--bt-ink) 78%,transparent)}
+.bt-needs-count{min-width:16px;padding:0 5px;border-radius:999px;background:color-mix(in srgb,var(--bt-accent) 18%,transparent);color:var(--bt-accent);font-variant-numeric:tabular-nums;text-align:center}
+.bt-needs-list{display:flex;flex-direction:column;gap:2px;list-style:none;margin:0;padding:0}
+.bt-needs-row{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;align-items:center;gap:6px;width:100%;padding:5px 6px;border:0;border-radius:8px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:inherit}
+.bt-needs-row:hover{background:var(--bt-hover)}
+.bt-needs-mark{width:6px;height:6px;border-radius:50%;background:var(--bt-accent)}
+.bt-needs-row[data-kind="blocked"] .bt-needs-mark{background:var(--bt-danger)}
+.bt-needs-row[data-kind="review"] .bt-needs-mark{background:var(--bt-green)}
+.bt-needs-kind{font-size:11px;color:color-mix(in srgb,var(--bt-ink) 56%,transparent);white-space:nowrap}
+.bt-needs-text{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-needs-bot{font-size:11px;color:color-mix(in srgb,var(--bt-ink) 46%,transparent);white-space:nowrap}
+.bt-needs-more{font-size:11px;color:color-mix(in srgb,var(--bt-ink) 50%,transparent);padding-left:6px}
+
 /* Chromium ignores ::-webkit-scrollbar when scrollbar-width or scrollbar-color (inherited) is non-auto. */
 .bt-side:not(.bt-rail)>.bt-list{margin-right:-12px;scrollbar-gutter:stable;scrollbar-width:auto;scrollbar-color:auto}
 .bt-side:not(.bt-rail)>.bt-list::-webkit-scrollbar{width:12px}
