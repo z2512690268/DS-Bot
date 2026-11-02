@@ -626,17 +626,36 @@ export function install(rt) {
   // ignoring a work does not hide the next state the same work comes back in.
   const needKey = item => (item.kind === 'answer' ? `answer:${item.questionId}` : `${item.kind}:${item.work}`)
 
+  // The row a work appears under: the kind, and the moment its current state began. The
+  // inbox and the health line both read it, so a row the user dismissed is not news in
+  // either place.
+  const workRowOf = (work) => {
+    const value = workStateOf(work)
+    return {
+      ...value,
+      kind: value.state === 'person/review' ? 'review' : value.state === 'person/proposed' ? 'proposed' : 'blocked',
+    }
+  }
+  // Hidden while the dismissal is at least as new as the state the row shows: a work
+  // that moves on after the user dismissed it is news again.
+  const dismissedAt = (key, since) => {
+    const at = (state.dismissed ?? {})[key]
+    return at !== undefined && at >= (since ?? 0)
+  }
+
   // Whether the system is well right now: the work that stopped reporting, and the
   // deliveries and answers that failed in the last hour. Nothing here when it is well.
   function workHealth() {
     const faults = state.workFaults ?? {}
     const now = Date.now()
     const recent = kind => (faults[kind] ?? []).filter(at => now - at < HEALTH_WINDOW_MS).length
-    return {
-      stalled: Object.values(works()).filter(work => work.stalled !== undefined || work.report?.stalled === true).length,
-      deliveryFailures: recent('delivery'),
-      answerFailures: recent('answer'),
-    }
+    // A stall the user dismissed is not news, exactly as its row is not in the inbox.
+    const stalled = Object.entries(works()).filter(([id, work]) => {
+      if (work.stalled === undefined && work.report?.stalled !== true) return false
+      const row = workRowOf(work)
+      return !dismissedAt(`${row.kind}:${id}`, row.since)
+    }).length
+    return { stalled, deliveryFailures: recent('delivery'), answerFailures: recent('answer') }
   }
 
   // Everything that waits for the user, in one list: the question cards the team has
@@ -665,37 +684,28 @@ export function install(rt) {
       })
     }
     for (const [id, work] of Object.entries(works())) {
-      const workStateValue = workStateOf(work)
-      if (!waitsForUser(workStateValue.state)) continue
-      const kind = workStateValue.state === 'person/review' ? 'review'
-        : workStateValue.state === 'person/proposed' ? 'proposed'
-          : 'blocked'
+      const row = workRowOf(work)
+      if (!waitsForUser(row.state)) continue
       // The row opens the Bot that is blocked, not the one that asked: opening the
       // asker's chat lands on the chat the user is already reading. A proposal has no
       // blocked Bot, so it opens the one that would have done it.
       const owner = work.proposal === undefined ? work.to ?? work.from : work.from
       items.push({
-        kind,
+        kind: row.kind,
         botId: owner,
         bot: rt.botOf(owner)?.name,
         sessionId: rt.chatOf(owner),
         ...(work.proposal !== undefined || rt.botOf(work.from)?.name === undefined ? {} : { askedBy: rt.botOf(work.from)?.name }),
         work: id,
-        since: workStateValue.since,
-        ...(workStateValue.summary === undefined ? {} : { summary: workStateValue.summary }),
+        since: row.since,
+        ...(row.summary === undefined ? {} : { summary: row.summary }),
         ...(work.proposal !== undefined ? { proposed: true, to: rt.botOf(work.to)?.name, summary: work.proposal.summary ?? work.proposal.text } : {}),
         history: work.history ?? [],
       })
     }
-    // What the user ignored stays hidden until that work or question moves on: an item
-    // whose state began after the dismissal is news again.
-    const dismissed = state.dismissed ?? {}
     return items
       .map(item => ({ ...item, key: needKey(item) }))
-      .filter((item) => {
-        const at = dismissed[item.key]
-        return at === undefined || at < (item.since ?? 0)
-      })
+      .filter(item => !dismissedAt(item.key, item.since))
       .sort((left, right) => (left.since ?? 0) - (right.since ?? 0))
   }
 
@@ -711,7 +721,14 @@ export function install(rt) {
       const id = key.slice(colon + 1)
       if (colon < 1 || id === '' || !['answer', 'blocked', 'review', 'proposed'].includes(kind)) continue
       dismissed[key] = at
-      if (kind === 'proposed' && works()[id] !== undefined) {
+      const work = works()[id]
+      if (work === undefined) continue
+      // An ignored proposal is gone for good, and so is a work that was already stalled:
+      // nothing waits on it any more once the user says so, so it should not sit in the
+      // team file for good. A work that is still running, or one that handed on work of
+      // its own, is only hidden: only the row goes away.
+      const stalled = work.stalled !== undefined || work.report?.stalled === true
+      if (kind === 'proposed' || (kind === 'blocked' && stalled && (work.open ?? []).length === 0)) {
         dropWork(id)
         dropped += 1
       }

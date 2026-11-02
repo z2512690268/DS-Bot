@@ -134,6 +134,41 @@ test('a work keeps its timeline while it is open and after it is answered', asyn
   assert.ok(closed.every((event, at) => at === 0 || event.at >= closed[at - 1].at))
 })
 
+test('a dismissed stall leaves the health line and the team file', async (t) => {
+  const { rt } = await bench(t).start()
+  rt.openWork('w1', { from: 'a', to: 'b' })
+  rt.sweepStalled(Date.now() + STALL_MS + 60_000)
+  assert.equal(rt.workHealth().stalled, 1)
+  assert.deepEqual(rt.needsYou().map(item => item.kind), ['blocked'])
+  const result = rt.dismissNeeds(['blocked:w1'])
+  assert.deepEqual(result, { dismissed: 1, dropped: 1 })
+  assert.equal(rt.workHealth().stalled, 0, 'a dismissed stall is not unhealthy any more')
+  assert.equal(rt.state.works.w1, undefined, 'and it does not sit in the team file for good')
+  assert.equal(rt.state.workLog.at(-1).final, 'blocked')
+  // The panel may send the same dismissal twice; the second one drops nothing.
+  assert.deepEqual(rt.dismissNeeds(['blocked:w1']), { dismissed: 1, dropped: 0 })
+})
+
+test('a work that is still running is hidden, never dropped', async (t) => {
+  const { rt } = await bench(t).start()
+  rt.openWork('live', { from: 'a', to: 'b' })
+  assert.deepEqual(rt.dismissNeeds(['blocked:live']), { dismissed: 1, dropped: 0 })
+  assert.ok(rt.state.works.live, 'a running work stays, only its row is hidden')
+  assert.deepEqual(rt.needsYou(), [])
+  assert.equal(rt.workHealth().stalled, 0)
+  // A stalled work that handed on work of its own is hidden too, but not dropped while
+  // that work is still out.
+  rt.openWork('parent', { from: 'a', to: 'b' })
+  rt.openWork('child', { from: 'b', to: 'a', parent: 'parent' })
+  rt.reportWork('parent', { state: 'blocked', summary: 'no progress for 40 min' })
+  rt.state.works.parent.report.stalled = true
+  rt.state.works.parent.stalled = { at: Date.now(), action: 'notify' }
+  assert.equal(rt.workHealth().stalled, 1)
+  assert.deepEqual(rt.dismissNeeds(['blocked:parent']), { dismissed: 1, dropped: 0 })
+  assert.ok(rt.state.works.parent, 'the parent of live work is not dropped')
+  assert.equal(rt.workHealth().stalled, 0)
+})
+
 test('a stall and a proposal each leave their own line in the history', async (t) => {
   const { rt } = await bench(t).start()
   const proposal = rt.proposeWork({ from: 'a', to: 'b', text: 'rewrite the changelog' })
