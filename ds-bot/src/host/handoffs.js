@@ -10,6 +10,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import { TEXT_KEPT } from './constants.js'
 import { headOf } from './text.js'
+import { normalizeReport, reportLine, workStateOf } from './work-state.js'
 
 const minutes = since => {
   const count = Math.floor((Date.now() - since) / 60_000)
@@ -232,8 +233,11 @@ export function install(rt) {
     })
     const body = results.length === 0 ? said || `${botName} finished without a reply.`
       : [said || `${botName} finished and wrote nothing more.`, `[Handed back to ${botName} for this work]`, ...results].join('\n\n')
+    // What the Bot reported goes above the answer: the Bot that asked reads the outcome
+    // before the detail it came with.
+    const answer = [reportLine(work?.report), body].filter(Boolean).join('\n\n')
     // The request reached its target only after a restart; the answer says so.
-    return work?.late === true ? `[This request reached ${botName} only after DeepSeek Harness restarted.]\n\n${body}` : body
+    return work?.late === true ? `[This request reached ${botName} only after DeepSeek Harness restarted.]\n\n${answer}` : answer
   }
 
   // The Bots waiting for the result of these works: whoever asked for each, and on up.
@@ -312,7 +316,12 @@ export function install(rt) {
       if (work.to !== botId) continue
       const forName = nameOf(work.from) ? `, for ${nameOf(work.from)}` : ''
       const on = [...new Set(out.map(child => (child.room ? `group "${rt.roomOf(child.room)?.name ?? 'a group'}"` : child.name ?? nameOf(child.to) ?? 'a teammate')))]
-      lines.push(on.length > 0 ? `waiting for ${on.join(' and ')} to hand back work${forName}` : `about to go on with work${forName}, whose results came back`)
+      // How long the work has waited, from the earliest piece of it still out, and what
+      // came back with a report that says it could not go on.
+      const since = out.reduce((earliest, child) => Math.min(earliest, child.at ?? Date.now()), Date.now())
+      const stopped = out.find(child => child.report?.state === 'blocked' || child.report?.state === 'failed')
+      const reported = stopped === undefined ? '' : `; it reported ${stopped.report.state}${stopped.report.summary ? `: ${stopped.report.summary}` : ''}`
+      lines.push(on.length > 0 ? `waiting ${minutes(since)} for ${on.join(' and ')} to hand back work${reported}${forName}` : `about to go on with work${forName}, whose results came back`)
     }
     if (lines.length === 0) lines.push('idle')
     if (state.questions?.[chat] !== undefined) lines.push('a question card in its own chat waits for the user\'s answer')
@@ -326,5 +335,22 @@ export function install(rt) {
     return lines.join('; ')
   }
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
+  // A report the Bot that answers a work makes about it: what it concluded, and what a
+  // user would have to do. The state is the Bot's judgement; the work itself stays the
+  // fact, so a report never closes it — the answer that ends the turn does.
+  function reportOn(id, input) {
+    const work = works()[id]
+    if (work === undefined) return { error: 'This turn is not answering a request, so there is no work to report on.' }
+    const { report, error } = normalizeReport(input)
+    if (error !== undefined) return { error }
+    if (report.state === 'progress') work.progress = report
+    else work.report = report
+    save()
+    return { report }
+  }
+
+  // The state of one work by id, for the tools and the panel.
+  const workState = id => workStateOf(works()[id])
+
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
 }

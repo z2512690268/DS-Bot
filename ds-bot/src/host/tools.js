@@ -8,6 +8,7 @@ import { within } from './folders.js'
 import { absoluteLinks } from './links.js'
 import { NAME_MAX } from './requests.js'
 import { unquote } from './text.js'
+import { REPORT_STATES } from './work-state.js'
 import { mentionSpans } from '../shared/mentions.js'
 import { checkShownView, showViewDescription, showViewParameters } from 'deep-view/core'
 
@@ -278,6 +279,34 @@ export function install(rt) {
         return `${out} Your message does not reach its work in ${groups.map(whereOf).join(' and ')}.${stop}`
       }
       return request === undefined ? await send() : answer(await rt.admitRequest(request, send))
+    },
+  }))
+
+  rt.teamTools.push(defineTool({
+    name: 'report',
+    description: 'Report on the request you are answering, while you work on it or before you finish it: what you concluded, and whether a user has to do something. "progress" leaves the work open and stays out of your answer; "ready", "blocked", "failed" and "dropped" go up with your answer, so the Bot that asked reads the outcome before the detail. A turn that ends without a report counts as ready.',
+    parameters: {
+      state: {
+        type: 'string',
+        required: true,
+        enum: REPORT_STATES,
+        description: '"progress": still working; "ready": done and usable; "blocked": needs a decision or something only a user can give; "failed": cannot be done; "dropped": nothing to do after all, and no user action is needed.',
+      },
+      summary: { type: 'string', description: 'One sentence for the Bot that asked, at most 500 characters.' },
+      human_action: { type: 'string', description: 'One concrete thing a user must do or decide, in one sentence. Only with blocked or failed.' },
+    },
+    output,
+    async execute(args, exec) {
+      await rt.load()
+      const sender = callerBot(exec)
+      if (sender === undefined) return 'Only Bots on the team can report.'
+      const work = worksOf(exec).find(id => rt.ownsWork(sender.id, id))
+      if (work === undefined) return 'Nothing to report: this turn is not answering a request another Bot made. Answer as usual.'
+      const { report, error } = rt.reportWork(work, args)
+      if (error !== undefined) refuse(error)
+      const said = report.summary ? `: ${report.summary}` : ''
+      if (report.state === 'progress') return `Recorded progress${said}. It stays out of your answer; go on with the work.`
+      return `Recorded ${report.state}${said}. It goes to the Bot that asked with your answer; when you end this turn, that is what it reads first.`
     },
   }))
 

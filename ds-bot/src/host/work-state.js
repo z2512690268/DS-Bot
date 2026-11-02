@@ -1,0 +1,62 @@
+// Work state: what a piece of handed-on work waits for, derived from what it holds.
+//
+// handoffs.js keeps the work tree, and statusOf says what a Bot is doing. The other
+// question a Bot has to guess today is what one piece of work waits for, and since
+// when: a question of the user, a result that came back, a report that could not go
+// on, or nothing but time. A model may report its judgement (report.js in tools.js),
+// but the state itself is derived, so an idle work cannot be described as a finished
+// one by whoever happens to be writing the answer.
+
+// What a Bot may report about the work it answers. `progress` leaves the work open and
+// stays out of the answer; the rest travel up with the answer.
+export const REPORT_STATES = ['progress', 'ready', 'blocked', 'failed', 'dropped']
+// A work that ends without a report is done: that is what a plain answer has always meant.
+export const DEFAULT_REPORT = 'ready'
+
+/**
+ * The state of one work, first matching row: a question for the user, a report that
+ * could not go on, a report of a result, or the work itself. `since` is the moment
+ * that state began, so callers can say how long it has waited.
+ */
+export function workStateOf(work, at = Date.now()) {
+  if (work === undefined) return { state: 'ended', since: at }
+  const { attention } = work
+  if (attention !== undefined && attention.answeredAt === undefined) {
+    return { state: 'person/answer', since: attention.at ?? work.at, question: attention.question }
+  }
+  const { report } = work
+  if (report !== undefined) {
+    const since = report.at ?? work.at
+    if (report.state === 'blocked') return { state: 'person/blocked', since, summary: report.summary, humanAction: report.humanAction }
+    if (report.state === 'failed') return { state: 'person/failed', since, summary: report.summary, humanAction: report.humanAction }
+    if (report.state === 'ready') return { state: 'person/review', since, summary: report.summary }
+  }
+  return { state: 'working', since: report?.at ?? work.at }
+}
+
+/** True when the state is one only the user can end: a question, a blocker, a result to review. */
+export const waitsForUser = state => state.startsWith('person/')
+
+/**
+ * The line a report adds above the answer that goes up the tree. Empty when the work
+ * carries no report, so a plain answer is unchanged.
+ */
+export function reportLine(report) {
+  if (report === undefined) return ''
+  const summary = String(report.summary ?? '').trim()
+  const head = summary === '' ? report.state : `${report.state}: ${summary}`
+  const ask = String(report.humanAction ?? '').trim()
+  return `[reported ${head}]${ask === '' ? '' : `\n${ask}`}`
+}
+
+/**
+ * What a report on this work means for the Bot that reported it: stored shape, or the
+ * complaint to give back when the report cannot be kept.
+ */
+export function normalizeReport(input = {}, at = Date.now()) {
+  const state = REPORT_STATES.includes(input.state) ? input.state : undefined
+  if (state === undefined) return { error: `A report is one of ${REPORT_STATES.join(', ')}.` }
+  const summary = String(input.summary ?? '').replace(/\s+/g, ' ').trim().slice(0, 500)
+  const humanAction = String(input.human_action ?? '').replace(/\s+/g, ' ').trim().slice(0, 500)
+  return { report: { state, ...(summary === '' ? {} : { summary }), ...(humanAction === '' ? {} : { humanAction }), at } }
+}
