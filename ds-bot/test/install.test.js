@@ -47,6 +47,7 @@ test('apply registers listeners and effects in a fixed order', (t) => {
     'on subagent/end',
     'on tools/result',
     'on session/event',
+    'effect ds-bot: mark work that stopped reporting',
     'on tools/execute',
     'effect ds-bot: identity section',
     'prompt bot-identity 640',

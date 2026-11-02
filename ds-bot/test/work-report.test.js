@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
-import { DEFAULT_REPORT, normalizeReport, reportLine, workStateOf } from '../src/host/work-state.js'
+import { DEFAULT_REPORT, STALL_MS, normalizeReport, reportLine, stalledReport, workStateOf } from '../src/host/work-state.js'
 
 const seed = () => ({
   version: 1,
@@ -71,7 +71,7 @@ async function startHost(home) {
   const tool = (name, args, sessionId) => rt.teamTools.find(d => d.name === name).execute(args, { agent: { id: sessionId } })
   // Loading once fills the Session-owner indexes turns.js filters events by.
   await tool('list_bots', {}, 'a')
-  return { rt, tool, home, stop: () => ctx.dispose() }
+  return { rt, tool, home, state: rt.state, stop: () => ctx.dispose() }
 }
 
 function bench(t) {
@@ -134,4 +134,47 @@ test('a report about no work is refused, and so is a state that is not one', asy
   rt.openWork('w1', { from: 'a', to: 'b' })
   assert.match(rt.reportWork('w1', { state: 'done' }).error, /one of/)
   assert.match(rt.reportWork('nope', { state: 'ready' }).error, /no work to report/)
+})
+
+test('a report that needs the user puts the question where the work was asked for', async (t) => {
+  const { rt, state } = await bench(t).start()
+  rt.openWork('w1', { from: 'a', to: 'b' })
+  rt.reportWork('w1', { state: 'blocked', summary: 'needs a key', human_action: 'Add the key to the vault' })
+  rt.closeWork('w1', 'Writer', 'I cannot read the file.')
+  const card = state.questions[rt.chatOf('a')]
+  assert.equal(card.question, 'Add the key to the vault')
+  assert.equal(card.detail, 'Writer: needs a key')
+  assert.deepEqual(card.options, [])
+  assert.equal(card.allowCustom, true)
+})
+
+test('a report with nothing for the user opens no question card', async (t) => {
+  const { rt, state } = await bench(t).start()
+  rt.openWork('w1', { from: 'a', to: 'b' })
+  rt.reportWork('w1', { state: 'ready', summary: 'the page is fixed' })
+  rt.closeWork('w1', 'Writer', 'Done.')
+  assert.equal(state.questions[rt.chatOf('a')], undefined)
+})
+
+test('work that stopped reporting is marked stalled, and a fresh one is not', () => {
+  const at = Date.now()
+  assert.deepEqual(stalledReport({ at: at - STALL_MS - 60_000 }, at),
+    { state: 'blocked', summary: 'no progress for 31 min', at, stalled: true })
+  assert.equal(stalledReport({ at }, at), undefined)
+  assert.equal(stalledReport({ at: at - STALL_MS - 60_000, report: { state: 'ready', at } }, at), undefined)
+  assert.equal(stalledReport({ at: 0, progress: { state: 'progress', at: at - 1000 } }, at), undefined)
+})
+
+test('sweeping marks the stale work, and the Bot that asked reads why it waits', async (t) => {
+  const { rt } = await bench(t).start()
+  rt.openWork('old', { from: 'a', to: 'b' })
+  const started = Date.now()
+  assert.equal(rt.sweepStalled(started), false)
+  assert.equal(rt.sweepStalled(started + STALL_MS + 60_000), true)
+  assert.equal(rt.workState('old').state, 'person/blocked')
+  assert.match(rt.workState('old').summary, /no progress for \d+ min/)
+  assert.match(rt.answerText('old', 'nothing yet', 'Writer'), /^\[reported blocked: no progress for \d+ min\]/)
+  rt.openWork('fresh', { from: 'a', to: 'b' })
+  assert.equal(rt.sweepStalled(Date.now()), false)
+  assert.equal(rt.workState('fresh').state, 'working')
 })

@@ -5,12 +5,12 @@
 // that came back, together with what came back. Results find their way up by
 // themselves, so no Bot needs to message one that waits for it, and that is the one
 // hand-off refused. The open works are kept in state.json so a restart waits on.
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { TEXT_KEPT } from './constants.js'
 import { headOf } from './text.js'
-import { normalizeReport, reportLine, workStateOf } from './work-state.js'
+import { normalizeReport, reportLine, stalledReport, workStateOf } from './work-state.js'
 
 const minutes = since => {
   const count = Math.floor((Date.now() - since) / 60_000)
@@ -106,11 +106,32 @@ export function install(rt) {
     save()
   }
 
+  // A report that names something only a user can do becomes a question card in the
+  // chat of the Bot that asked, so the user answers it where the work was asked for
+  // instead of reading it as one more line of the answer. A card the Bot already has
+  // open wins: the user is being asked something else right now.
+  function askAttention(work, name) {
+    const report = work.report
+    if (report?.humanAction === undefined || report.state === 'dropped' || report.state === 'ready') return
+    const chat = work.from === undefined ? undefined : rt.chatOf(work.from)
+    if (chat === undefined || state.questions?.[chat] !== undefined) return
+    state.questions ??= {}
+    state.questions[chat] = {
+      id: randomUUID(),
+      question: report.humanAction,
+      detail: `${name}: ${report.summary ?? report.state}`,
+      options: [],
+      allowCustom: true,
+      askedAt: Date.now(),
+    }
+  }
+
   // The answer to work `id` is on its way, with `result` from `name`. Returns the work
   // it goes on with. That work keeps waiting until a turn reads the answer (`taken`).
   function closeWork(id, name, text) {
     const work = works()[id]
     if (work === undefined) return undefined
+    askAttention(work, name)
     delete works()[id]
     // What it still waits for comes back to it alone.
     for (const child of Object.values(works())) if (child.parent === id) delete child.parent
@@ -352,5 +373,25 @@ export function install(rt) {
   // The state of one work by id, for the tools and the panel.
   const workState = id => workStateOf(works()[id])
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
+  // Work that stopped reporting is marked stale, so the Bot that asked reads why it
+  // still waits instead of waiting forever. Marking it costs no model call: the state
+  // shows in statusOf and list_bots, and the answer already carries it when it comes.
+  const sweepStalled = (at = Date.now()) => {
+    let changed = false
+    for (const work of Object.values(works())) {
+      const report = stalledReport(work, at)
+      if (report === undefined) continue
+      work.report = report
+      changed = true
+    }
+    if (changed) save()
+    return changed
+  }
+  rt.ctx?.effect?.(() => {
+    const timer = setInterval(() => sweepStalled(), 60_000)
+    timer.unref?.()
+    return () => clearInterval(timer)
+  }, 'ds-bot: mark work that stopped reporting')
+
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
 }

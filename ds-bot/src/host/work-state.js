@@ -60,3 +60,21 @@ export function normalizeReport(input = {}, at = Date.now()) {
   const humanAction = String(input.human_action ?? '').replace(/\s+/g, ' ').trim().slice(0, 500)
   return { report: { state, ...(summary === '' ? {} : { summary }), ...(humanAction === '' ? {} : { humanAction }), at } }
 }
+
+/** How long a work may go without a report before the code marks it stale. */
+export const STALL_MS = 30 * 60_000
+
+/**
+ * The report a work that stopped reporting gets, or undefined while it is young
+ * enough or has already reported an outcome. Marking it is the only thing the host
+ * does: it does not wake the Bot that asked, which would cost a model call for news
+ * the panel and `list_bots` already carry.
+ */
+export function stalledReport(work, at = Date.now(), deadline = STALL_MS) {
+  if (work === undefined) return undefined
+  if (work.report !== undefined && work.report.state !== 'progress') return undefined
+  const since = work.progress?.at ?? work.at ?? at
+  if (at - since < deadline) return undefined
+  const min = Math.max(1, Math.round((at - since) / 60_000))
+  return { state: 'blocked', summary: `no progress for ${min} min`, at, stalled: true }
+}
