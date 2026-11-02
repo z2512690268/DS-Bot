@@ -642,6 +642,8 @@ export function install(rt) {
     const at = (state.dismissed ?? {})[key]
     return at !== undefined && at >= (since ?? 0)
   }
+  // The host's own mark that a work stopped reporting, as opposed to the owner's report.
+  const stalledWork = work => work.stalled !== undefined || work.report?.stalled === true
 
   // Whether the system is well right now: the work that stopped reporting, and the
   // deliveries and answers that failed in the last hour. Nothing here when it is well.
@@ -651,7 +653,7 @@ export function install(rt) {
     const recent = kind => (faults[kind] ?? []).filter(at => now - at < HEALTH_WINDOW_MS).length
     // A stall the user dismissed is not news, exactly as its row is not in the inbox.
     const stalled = Object.entries(works()).filter(([id, work]) => {
-      if (work.stalled === undefined && work.report?.stalled !== true) return false
+      if (!stalledWork(work)) return false
       const row = workRowOf(work)
       return !dismissedAt(`${row.kind}:${id}`, row.since)
     }).length
@@ -727,7 +729,7 @@ export function install(rt) {
       // nothing waits on it any more once the user says so, so it should not sit in the
       // team file for good. A work that is still running, or one that handed on work of
       // its own, is only hidden: only the row goes away.
-      const stalled = work.stalled !== undefined || work.report?.stalled === true
+      const stalled = stalledWork(work)
       if (kind === 'proposed' || (kind === 'blocked' && stalled && (work.open ?? []).length === 0)) {
         dropWork(id)
         dropped += 1
@@ -795,6 +797,17 @@ export function install(rt) {
   const sweepStalled = (at = Date.now()) => {
     let changed = false
     for (const [id, work] of Object.entries(works())) {
+      // A stall the user already dismissed needs no place in the team file: its row is
+      // hidden for good, so the sweep clears it. One that handed on work of its own is
+      // kept while that work is still out, the same as a dismissal now leaves it.
+      if (stalledWork(work) && (work.open ?? []).length === 0) {
+        const row = workRowOf(work)
+        if (dismissedAt(`${row.kind}:${id}`, row.since)) {
+          dropWork(id)
+          changed = true
+          continue
+        }
+      }
       if (work.stalled !== undefined) continue
       const report = stalledReport(work, at, leasePolicy.deadline)
       if (report === undefined) continue
