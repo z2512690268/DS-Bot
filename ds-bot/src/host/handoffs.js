@@ -72,6 +72,7 @@ export function install(rt) {
   // A delivery that failed, or an answer that never reached the Bot that asked. Kept
   // for an hour: the panel answers "is the system healthy now", not "was it ever".
   const HEALTH_WINDOW_MS = 60 * 60_000
+  const DAY_MS = 24 * 60 * 60_000
   const FAULT_KINDS = ['delivery', 'answer']
   function noteFault(kind) {
     if (!FAULT_KINDS.includes(kind)) return
@@ -171,7 +172,7 @@ export function install(rt) {
   // reads what the Bot would have done next to the work it belongs to, and nothing is
   // sent; `off` refuses it above. A proposal is never put in its parent's `open`: the
   // Bot that asked waits for the results it actually handed on, not for this.
-  function propose({ from, to, parent, text, room }) {
+  function propose({ from, to, parent, text, room, reason }) {
     const work = String(text ?? '').replace(/\r\n?/g, '\n').trim()
     if (from === undefined || to === undefined || work === '') return undefined
     // The same proposal repeated in the same chat would only crowd the list.
@@ -192,7 +193,7 @@ export function install(rt) {
       ...(works()[parent] !== undefined ? { parent } : {}),
       authority: 'proposed',
       lease: { at, by: to },
-      proposal: { at, text: whole, summary: kept, ...(work.length > MESSAGE_INLINE_MAX ? { length: work.length } : {}) },
+      proposal: { at, text: whole, summary: kept, ...(String(reason ?? '').trim() === '' ? {} : { reason: headOf(String(reason).replace(/\s+/g, ' ').trim(), 300) }), ...(work.length > MESSAGE_INLINE_MAX ? { length: work.length } : {}) },
       open: [],
       results: [],
       at,
@@ -236,6 +237,37 @@ export function install(rt) {
     return `Not sent: this team runs in observe mode, so a Bot does not start work on its own. What you would have sent was recorded as a proposal (${id}) and the user sees it under "Needs you", next to the work it belongs to, and can approve it there. Tell the user what you would have done and why; do not send it again.`
   }
 
+  // A Bot that sees a concrete piece of work in a group round nobody named it in records
+  // it instead of doing it: that is what observe mode is for. Anywhere else it is not a
+  // proposal — the user or another Bot asked, so the Bot acts.
+  function recordProposal(exec, input = {}) {
+    const sessionId = exec.agent?.id
+    const turn = rt.live.get(sessionId)
+    const info = turn?.info
+    if (info?.role !== 'room') return { error: 'A proposal is only for a group round nobody named you in. Here, do the work or say what you would do.' }
+    if (proactive === 'off') return { error: 'Proactive work is off for this team, so a Bot does not propose work on its own.' }
+    if (info.askedBy !== undefined || info.namedByUser === true) return { error: 'This round called you, so the work is yours to do: do it, or hand it on with post_to_group.' }
+    const from = rt.selfOf?.(sessionId) ?? rt.groupOwners?.get(sessionId)?.botId
+    if (from === undefined) return { error: 'Only a Bot on the team can propose work.' }
+    const room = info.roomId === undefined ? undefined : rt.roomOf(info.roomId)
+    if (room !== undefined && rt.isAdminOf?.(room, from)) return { error: 'You lead this round, so decide and hand the work on with post_to_group; a proposal is for a member the round did not call.' }
+    if ((turn.proposed ?? 0) >= 1) return { error: 'One proposal per turn: keep the one worth the user\'s attention.' }
+    const title = String(input.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 200)
+    if (title === '') return { error: 'Write a short title for the work you would do.' }
+    const id = propose({ from, to: from, text: title, reason: input.reason, room: info.roomId })
+    if (id === undefined) return { error: 'There was nothing to record.' }
+    turn.proposed = (turn.proposed ?? 0) + 1
+    return { id }
+  }
+
+  // A proposal that is settled without becoming a hand-off: recorded, then gone. Its
+  // final state says what became of it rather than pretending it was answered.
+  function settleProposal(id, work, final) {
+    recordClosed(id, work, final)
+    delete works()[id]
+    save()
+  }
+
   // The user turns an observed proposal into real work: the proposal record becomes the
   // request, so its answer comes back to the same work and no second one is opened. The
   // request is named by the proposal, so a retry — after a lost answer or a restart that
@@ -261,11 +293,14 @@ export function install(rt) {
         // It went out before and the saved state did not catch up: the work is the
         // request now, so the proposal must not wait in the list a second time.
         if (work.proposal !== undefined) {
-          delete work.proposal
-          work.authority = 'asked'
-          work.lease = { at: Date.now(), by: work.to }
-          pushHistory(work, { at: Date.now(), event: 'approved' })
-          save()
+          if (work.from === work.to) settleProposal(id, work, 'approved')
+          else {
+            delete work.proposal
+            work.authority = 'asked'
+            work.lease = { at: Date.now(), by: work.to }
+            pushHistory(work, { at: Date.now(), event: 'approved' })
+            save()
+          }
         }
         return { ok: true }
       }
@@ -274,8 +309,21 @@ export function install(rt) {
     const at = Date.now()
     try {
       await rt.admitRequest(identity, async () => {
-        const text = `[The user approved this request]\n\n${work.proposal.text}`
-        const receipt = await rt.deliver({ fromId: work.from, toId: work.to, role: 'request', exchangeId: id, text })
+        const approved = `[The user approved this request]\n\n${work.proposal.text}${work.proposal.reason === undefined ? '' : `\n\nWhy: ${work.proposal.reason}`}`
+        // A Bot that offered the work itself needs no request: the user's approval is
+        // the message, in the chat where the work already lives.
+        if (work.from === work.to) {
+          await rt.ensureCapabilities?.(rt.chatOf(work.to))
+          await rt.ctx.sessionController.prompt({
+            requestId: randomUUID(),
+            sessionId: rt.chatOf(work.to),
+            mode: 'queue',
+            content: [{ type: 'text', text: approved }],
+          }, AbortSignal.timeout(30_000))
+          settleProposal(id, work, 'approved')
+          return id
+        }
+        const receipt = await rt.deliver({ fromId: work.from, toId: work.to, role: 'request', exchangeId: id, text: approved })
         // Only once it went out does the record become the request: a delivery that
         // failed leaves the proposal where the user can try again.
         delete work.proposal
@@ -599,7 +647,7 @@ export function install(rt) {
 
   // How the team's work has gone so far, read from the log of closed works and the
   // open ones. Read-only: a panel may ask as often as it polls.
-  function workStats() {
+  function workStats(at = Date.now()) {
     const closed = state.workLog ?? []
     const byFinal = {}
     let ms = 0
@@ -613,12 +661,31 @@ export function install(rt) {
         timed += 1
       }
     }
+    // The summary the panel shows, for the last day only: a team that did nothing worth
+    // reporting today stays quiet instead of showing a lifetime total.
+    const since = at - DAY_MS
+    const today = closed.filter(entry => (entry.closedAt ?? 0) >= since)
+    const durations = today.map(entry => entry.ms).filter(length => length !== undefined).sort((left, right) => left - right)
+    const middle = Math.floor(durations.length / 2)
+    const medianMs = durations.length === 0 ? undefined
+      : durations.length % 2 === 1 ? durations[middle] : Math.round((durations[middle - 1] + durations[middle]) / 2)
+    const faults = state.workFaults ?? {}
+    const failed = kind => (faults[kind] ?? []).filter(time => at - time < DAY_MS).length
+    const stalled = Object.values(works()).filter(stalledWork).length
+      + today.filter(entry => (entry.history ?? []).some(event => event.event === 'stalled')).length
     return {
       closed: closed.length,
       open: Object.keys(works()).length,
       byFinal,
       turns,
       ...(timed === 0 ? {} : { avgMs: Math.round(ms / timed) }),
+      day: {
+        closed: today.length,
+        ...(medianMs === undefined ? {} : { medianMs }),
+        stalled,
+        deliveryFailures: failed('delivery'),
+        answerFailures: failed('answer'),
+      },
     }
   }
 
@@ -701,7 +768,7 @@ export function install(rt) {
         work: id,
         since: row.since,
         ...(row.summary === undefined ? {} : { summary: row.summary }),
-        ...(work.proposal !== undefined ? { proposed: true, to: rt.botOf(work.to)?.name, summary: work.proposal.summary ?? work.proposal.text } : {}),
+        ...(work.proposal !== undefined ? { proposed: true, ...(work.to === work.from ? {} : { to: rt.botOf(work.to)?.name }), summary: work.proposal.summary ?? work.proposal.text } : {}),
         history: work.history ?? [],
       })
     }
@@ -832,5 +899,5 @@ export function install(rt) {
     return () => clearInterval(timer)
   }, 'ds-bot: mark work that stopped reporting')
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, approveProposal, noteWorkTurn, noteFault, workStats, workHistory, workHealth, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, recordProposal, approveProposal, noteWorkTurn, noteFault, workStats, workHistory, workHealth, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
 }

@@ -582,6 +582,7 @@ export function TeamSidebar(props) {
     wideContent ? h(NeedsYou, {
       items: roster.needsYou ?? [],
       health: roster.workHealth,
+      stats: roster.workStats,
       onOpen: id => actions.openSession(id),
       onAnswer: (sessionId, questionId, answer) => {
         void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer))

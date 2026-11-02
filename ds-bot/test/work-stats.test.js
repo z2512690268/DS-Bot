@@ -147,12 +147,34 @@ test('workStats summarises the log and the open work without changing anything',
   assert.ok(typeof stats.avgMs === 'number' && stats.avgMs >= 0)
 })
 
+test('the day summary counts only the last 24 hours', async (t) => {
+  const { rt } = await bench(t).start()
+  const now = Date.now()
+  rt.state.workLog = [
+    { id: 'a', final: 'ready', closedAt: now - 1_000, ms: 60_000, turns: 1, history: [] },
+    { id: 'b', final: 'ready', closedAt: now - 2_000, ms: 180_000, turns: 1, history: [] },
+    { id: 'c', final: 'blocked', closedAt: now - 25 * 60 * 60_000, ms: 9_000_000, turns: 1, history: [{ at: now - 25 * 60 * 60_000, event: 'stalled' }] },
+  ]
+  rt.state.workFaults = { delivery: [now - 1_000, now - 25 * 60 * 60_000], answer: [now - 500] }
+  assert.deepEqual(rt.workStats(now).day, { closed: 2, medianMs: 120_000, stalled: 0, deliveryFailures: 1, answerFailures: 1 })
+  // Work still open and stalled is part of the picture, as is a stall that ended today.
+  rt.openWork('w1', { from: 'a', to: 'b' })
+  rt.state.works.w1.stalled = { at: now, action: 'notify' }
+  rt.state.workLog[1].history = [{ at: now - 500, event: 'stalled' }]
+  assert.equal(rt.workStats(now).day.stalled, 2)
+  // A team that did nothing today has no summary to show.
+  assert.deepEqual(rt.workStats(now + 25 * 60 * 60_000).day, { closed: 0, stalled: 1, deliveryFailures: 0, answerFailures: 0 })
+})
+
 test('the state payload carries the summary', async (t) => {
   const { rt, call } = await bench(t).start()
   rt.openWork('w1', { from: 'a', to: 'b' })
   rt.closeWork('w1', 'Writer', 'Done.')
   const answer = await call('state', {})
   assert.equal(answer.ok, true)
-  assert.deepEqual(answer.value.workStats, { closed: 1, open: 0, byFinal: { ready: 1 }, turns: 0, avgMs: answer.value.workStats.avgMs })
-  assert.ok(typeof answer.value.workStats.avgMs === 'number')
+  const stats = answer.value.workStats
+  assert.deepEqual([stats.closed, stats.open, stats.byFinal, stats.turns], [1, 0, { ready: 1 }, 0])
+  assert.ok(typeof stats.avgMs === 'number')
+  assert.deepEqual([stats.day.closed, stats.day.stalled, stats.day.deliveryFailures], [1, 0, 0])
+  assert.ok(typeof stats.day.medianMs === 'number')
 })
