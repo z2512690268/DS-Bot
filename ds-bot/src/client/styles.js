@@ -155,6 +155,7 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-scroll{max-height:38vh;overflow-y:auto;overscroll-behavior:contain}
 .bt-needs-row[data-kind="proposed"] .bt-needs-mark{background:var(--bt-accent);opacity:.55}
 .bt-needs-health{font-size:11px;line-height:1.4;padding:4px 6px;border-radius:8px;color:color-mix(in srgb,var(--bt-danger) 78%,var(--bt-ink));background:color-mix(in srgb,var(--bt-danger) 10%,transparent)}
+.bt-needs-stats{font-size:11px;line-height:1.4;padding:0 6px;color:color-mix(in srgb,var(--bt-ink) 50%,transparent)}
 .bt-needs-history{list-style:none;margin:0;padding:0 6px 4px 18px;display:flex;flex-direction:column;gap:1px;font-size:11px;color:color-mix(in srgb,var(--bt-ink) 62%,transparent)}
 .bt-needs-history li{display:flex;gap:6px;min-width:0}
 .bt-needs-hist-time{font-variant-numeric:tabular-nums;color:color-mix(in srgb,var(--bt-ink) 42%,transparent);white-space:nowrap}

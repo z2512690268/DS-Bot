@@ -72,6 +72,7 @@ export function install(rt) {
   // A delivery that failed, or an answer that never reached the Bot that asked. Kept
   // for an hour: the panel answers "is the system healthy now", not "was it ever".
   const HEALTH_WINDOW_MS = 60 * 60_000
+  const DAY_MS = 24 * 60 * 60_000
   const FAULT_KINDS = ['delivery', 'answer']
   function noteFault(kind) {
     if (!FAULT_KINDS.includes(kind)) return
@@ -599,7 +600,7 @@ export function install(rt) {
 
   // How the team's work has gone so far, read from the log of closed works and the
   // open ones. Read-only: a panel may ask as often as it polls.
-  function workStats() {
+  function workStats(at = Date.now()) {
     const closed = state.workLog ?? []
     const byFinal = {}
     let ms = 0
@@ -613,12 +614,31 @@ export function install(rt) {
         timed += 1
       }
     }
+    // The summary the panel shows, for the last day only: a team that did nothing worth
+    // reporting today stays quiet instead of showing a lifetime total.
+    const since = at - DAY_MS
+    const today = closed.filter(entry => (entry.closedAt ?? 0) >= since)
+    const durations = today.map(entry => entry.ms).filter(length => length !== undefined).sort((left, right) => left - right)
+    const middle = Math.floor(durations.length / 2)
+    const medianMs = durations.length === 0 ? undefined
+      : durations.length % 2 === 1 ? durations[middle] : Math.round((durations[middle - 1] + durations[middle]) / 2)
+    const faults = state.workFaults ?? {}
+    const failed = kind => (faults[kind] ?? []).filter(time => at - time < DAY_MS).length
+    const stalled = Object.values(works()).filter(stalledWork).length
+      + today.filter(entry => (entry.history ?? []).some(event => event.event === 'stalled')).length
     return {
       closed: closed.length,
       open: Object.keys(works()).length,
       byFinal,
       turns,
       ...(timed === 0 ? {} : { avgMs: Math.round(ms / timed) }),
+      day: {
+        closed: today.length,
+        ...(medianMs === undefined ? {} : { medianMs }),
+        stalled,
+        deliveryFailures: failed('delivery'),
+        answerFailures: failed('answer'),
+      },
     }
   }
 

@@ -2636,6 +2636,7 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-scroll{max-height:38vh;overflow-y:auto;overscroll-behavior:contain}
 .bt-needs-row[data-kind="proposed"] .bt-needs-mark{background:var(--bt-accent);opacity:.55}
 .bt-needs-health{font-size:11px;line-height:1.4;padding:4px 6px;border-radius:8px;color:color-mix(in srgb,var(--bt-danger) 78%,var(--bt-ink));background:color-mix(in srgb,var(--bt-danger) 10%,transparent)}
+.bt-needs-stats{font-size:11px;line-height:1.4;padding:0 6px;color:color-mix(in srgb,var(--bt-ink) 50%,transparent)}
 .bt-needs-history{list-style:none;margin:0;padding:0 6px 4px 18px;display:flex;flex-direction:column;gap:1px;font-size:11px;color:color-mix(in srgb,var(--bt-ink) 62%,transparent)}
 .bt-needs-history li{display:flex;gap:6px;min-width:0}
 .bt-needs-hist-time{font-variant-numeric:tabular-nums;color:color-mix(in srgb,var(--bt-ink) 42%,transparent);white-space:nowrap}
@@ -10053,6 +10054,30 @@ function healthLineOf(health) {
   if (health.stalled > 0) parts.push(zh() ? `${health.stalled} 件停滞` : `${health.stalled} stalled`);
   return parts.length === 0 ? void 0 : parts.join(" · ");
 }
+function shortDuration(ms) {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "";
+  const sec = Math.round(ms / 1e3);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hour = Math.floor(min / 60);
+  const rest = min % 60;
+  return rest === 0 ? `${hour}h` : `${hour}h ${rest}m`;
+}
+function statsLineOf(stats) {
+  const day = stats?.day;
+  if (day === void 0 || day === null) return void 0;
+  const closed = day.closed ?? 0;
+  const stalled = day.stalled ?? 0;
+  const failures = (day.deliveryFailures ?? 0) + (day.answerFailures ?? 0);
+  if (closed === 0 && stalled === 0 && failures === 0) return void 0;
+  const parts = [];
+  if (closed > 0) parts.push(zh() ? `关闭 ${closed} 件` : `${closed} done`);
+  if (day.medianMs !== void 0) parts.push(zh() ? `中位 ${shortDuration(day.medianMs)}` : `median ${shortDuration(day.medianMs)}`);
+  if (stalled > 0) parts.push(zh() ? `停滞 ${stalled}` : `${stalled} stalled`);
+  if (failures > 0) parts.push(zh() ? `失败 ${failures}` : `${failures} failed`);
+  return `${zh() ? "近 24 小时" : "Last 24h"}: ${parts.join(" · ")}`;
+}
 var EVENT_NAMES = {
   created: ["创建", "Created"],
   proposed: ["提议", "Proposed"],
@@ -10199,15 +10224,16 @@ async function replyAndDismiss({ item, said, hidden = {}, at = Date.now(), onSen
     return { ok: false, error, hidden };
   }
 }
-function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onApprove, onIgnore, onError }) {
+function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, onSend, onApprove, onIgnore, onError }) {
   const items = Array.isArray(all_items) ? all_items : [];
   const [open, setOpen] = (0, import_react21.useState)({});
   const [all, setAll] = (0, import_react21.useState)(false);
   const [timeline, setTimeline] = (0, import_react21.useState)({});
   const [hidden, setHidden] = (0, import_react21.useState)({});
   const trouble = healthLineOf(health);
+  const summary = statsLineOf(stats);
   const rows2 = visibleItems(items, hidden);
-  if (rows2.length === 0 && trouble === void 0) return null;
+  if (rows2.length === 0 && trouble === void 0 && summary === void 0) return null;
   const answers = rows2.filter((item) => item.kind === "answer");
   const works = rows2.filter((item) => item.kind !== "answer");
   const toggle = (key) => setOpen((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -10264,6 +10290,7 @@ function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onApprov
     "section",
     { className: "bt-needs", "aria-label": zh() ? "需要你" : "Needs you" },
     trouble === void 0 ? null : (0, import_react21.createElement)("div", { className: "bt-needs-health", role: "status", title: zh() ? "最近一小时" : "In the last hour" }, trouble),
+    summary === void 0 ? null : (0, import_react21.createElement)("div", { className: "bt-needs-stats", title: zh() ? "最近 24 小时" : "In the last 24 hours" }, summary),
     (0, import_react21.createElement)(
       "div",
       { className: "bt-needs-head" },
@@ -10937,6 +10964,7 @@ function TeamSidebar(props) {
     wideContent ? (0, import_react22.createElement)(NeedsYou, {
       items: roster.needsYou ?? [],
       health: roster.workHealth,
+      stats: roster.workStats,
       onOpen: (id) => actions.openSession(id),
       onAnswer: (sessionId, questionId, answer) => {
         void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer)).catch((error) => actions.reportError?.(error, "answer-question"));

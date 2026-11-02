@@ -15,7 +15,7 @@ const { JSDOM } = createRequire(join(process.env.DSH_HARNESS ?? join(PLUGIN, '..
 // read without a renderer. `useState` keeps its first value, which is what a first
 // paint shows; `mount` below gives it a store, for what a click does.
 const { outputFiles } = await build({
-  stdin: { contents: "export { NeedsYou, healthLineOf, historyLines, visibleItems } from './src/client/need-you.js'", resolveDir: PLUGIN },
+  stdin: { contents: "export { NeedsYou, healthLineOf, historyLines, visibleItems, statsLineOf, shortDuration } from './src/client/need-you.js'", resolveDir: PLUGIN },
   bundle: true, format: 'cjs', platform: 'browser', write: false, logLevel: 'silent',
   external: ['react'],
 })
@@ -34,7 +34,7 @@ const react = {
   Fragment: Symbol('Fragment'),
   useState: initial => [initial, () => {}],
 }
-const { NeedsYou, healthLineOf, historyLines, visibleItems } = load(react)
+const { NeedsYou, healthLineOf, historyLines, visibleItems, statsLineOf, shortDuration } = load(react)
 
 const flat = (children) => children.flatMap(child => (Array.isArray(child) ? flat(child) : child === undefined || child === null || child === false ? [] : [child]))
 // The stand-in does not run components, so the walk does: a component element is
@@ -248,6 +248,19 @@ test('the health line says what is wrong, and stays quiet about what is well', (
   assert.ok(tree, 'a stalled team shows the health line even with no rows')
   assert.match(textOf(tree), /2 stalled/)
   assert.equal(NeedsYou({ items: [], health: { stalled: 0, deliveryFailures: 0, answerFailures: 0 }, onOpen() {} }), null)
+})
+
+test('the day is one quiet line, and a quiet day says nothing', () => {
+  assert.equal(statsLineOf(undefined), undefined)
+  assert.equal(statsLineOf({ day: { closed: 0, stalled: 0, deliveryFailures: 0, answerFailures: 0 } }), undefined)
+  assert.equal(statsLineOf({ day: { closed: 2, medianMs: 90_000, stalled: 1, deliveryFailures: 2, answerFailures: 1 } }),
+    'Last 24h: 2 done · median 1m · 1 stalled · 3 failed')
+  assert.equal(statsLineOf({ day: { closed: 1, medianMs: 180_000, stalled: 0, deliveryFailures: 0, answerFailures: 0 } }),
+    'Last 24h: 1 done · median 3m')
+  assert.deepEqual([12_000, 90_000, 3_600_000, 3_960_000].map(shortDuration), ['12s', '1m', '1h', '1h 6m'])
+  const tree = NeedsYou({ items: [], stats: { day: { closed: 1, medianMs: 60_000, stalled: 0, deliveryFailures: 0, answerFailures: 0 } }, onOpen() {} })
+  assert.ok(tree, 'a day with work shows its line even with no rows')
+  assert.match(textOf(tree), /Last 24h: 1 done · median 1m/)
 })
 
 test('one work\'s history reads as a timeline from the moment it was opened', () => {

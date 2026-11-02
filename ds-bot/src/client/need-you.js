@@ -39,6 +39,36 @@ export function healthLineOf(health) {
   return parts.length === 0 ? undefined : parts.join(' · ')
 }
 
+// A length of time as a short phrase: 12s, 4m, 1h 6m.
+export function shortDuration(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return ''
+  const sec = Math.round(ms / 1000)
+  if (sec < 60) return `${sec}s`
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}m`
+  const hour = Math.floor(min / 60)
+  const rest = min % 60
+  return rest === 0 ? `${hour}h` : `${hour}h ${rest}m`
+}
+
+// How the day went, in one line for the same block: what finished, how long the typical
+// one took, what is stalled, and what failed. Nothing to say on a quiet day, and no
+// dashboard: one sentence, in the same voice as the health line.
+export function statsLineOf(stats) {
+  const day = stats?.day
+  if (day === undefined || day === null) return undefined
+  const closed = day.closed ?? 0
+  const stalled = day.stalled ?? 0
+  const failures = (day.deliveryFailures ?? 0) + (day.answerFailures ?? 0)
+  if (closed === 0 && stalled === 0 && failures === 0) return undefined
+  const parts = []
+  if (closed > 0) parts.push(zh() ? `关闭 ${closed} 件` : `${closed} done`)
+  if (day.medianMs !== undefined) parts.push(zh() ? `中位 ${shortDuration(day.medianMs)}` : `median ${shortDuration(day.medianMs)}`)
+  if (stalled > 0) parts.push(zh() ? `停滞 ${stalled}` : `${stalled} stalled`)
+  if (failures > 0) parts.push(zh() ? `失败 ${failures}` : `${failures} failed`)
+  return `${zh() ? '近 24 小时' : 'Last 24h'}: ${parts.join(' · ')}`
+}
+
 // The history question, as the lines of one work's timeline: the time is counted from
 // the moment it was opened, so a row reads "2m 10s blocked: needs a key".
 const EVENT_NAMES = {
@@ -178,15 +208,16 @@ export async function replyAndDismiss({ item, said, hidden = {}, at = Date.now()
   }
 }
 
-export function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onApprove, onIgnore, onError }) {
+export function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, onSend, onApprove, onIgnore, onError }) {
   const items = Array.isArray(all_items) ? all_items : []
   const [open, setOpen] = useState({}) // per item: is its answer field shown
   const [all, setAll] = useState(false) // every answer field at once
   const [timeline, setTimeline] = useState({}) // per work: is its history shown
   const [hidden, setHidden] = useState({}) // item key: when this window took it away
   const trouble = healthLineOf(health)
+  const summary = statsLineOf(stats)
   const rows = visibleItems(items, hidden)
-  if (rows.length === 0 && trouble === undefined) return null
+  if (rows.length === 0 && trouble === undefined && summary === undefined) return null
   const answers = rows.filter(item => item.kind === 'answer')
   const works = rows.filter(item => item.kind !== 'answer')
   const toggle = key => setOpen(prev => ({ ...prev, [key]: !prev[key] }))
@@ -246,6 +277,7 @@ export function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, o
   }
   return h('section', { className: 'bt-needs', 'aria-label': zh() ? '需要你' : 'Needs you' },
     trouble === undefined ? null : h('div', { className: 'bt-needs-health', role: 'status', title: zh() ? '最近一小时' : 'In the last hour' }, trouble),
+    summary === undefined ? null : h('div', { className: 'bt-needs-stats', title: zh() ? '最近 24 小时' : 'In the last 24 hours' }, summary),
     h('div', { className: 'bt-needs-head' },
       h('span', { className: 'bt-needs-title' }, zh() ? '需要你' : 'Needs you'),
       h('span', { className: 'bt-needs-count' }, String(rows.length)),
