@@ -823,6 +823,16 @@ export function install(rt) {
         // A turn stopped for a switch goes on in the next part, which answers instead.
         const switched = entry.switched === true
         entry.turn = undefined
+        // A message that arrived during this turn waits for the next one. If it is
+        // still waiting now that the turn has ended, nothing woke the Session, and
+        // the message sits in the chat until something else starts a turn.
+        void Promise.resolve()
+          .then(() => rt.resolveAgent?.(id))
+          .then((agent) => {
+            const waiting = [...(agent?.inbox?.nextTurn ?? [])].length
+            if (waiting > 0) rt.warn('ds-bot: %s ended a turn with %d message(s) still waiting for the next one', id, waiting)
+          })
+          .catch(() => {})
         entry.info = undefined
         entry.texts = []
         entry.shown = 0
@@ -1041,6 +1051,25 @@ export function install(rt) {
       return () => { if (controller.prompt === admitted) controller.prompt = prompt }
     }, 'ds-bot: prompt rejection reasons')
   }
+
+  // A message that waits for the next turn is answered at once. Follow-up delivery
+  // wakes a Session by itself; when the Session was finishing a turn or doing its
+  // upkeep, the wake can be missed, and the message then sits in the chat until
+  // something else starts a turn. Each message is woken once, so this cannot loop.
+  const woken = new Set()
+  ctx.on('agent/status', ({ agent, status }) => {
+    if (status !== 'idle' || agent === undefined || rt.live.get(agent.id)?.turn !== undefined) return
+    const queued = [...(agent.inbox?.nextTurn ?? [])].filter(message => !woken.has(message.id))
+    const next = queued[0]
+    if (next === undefined) return
+    woken.add(next.id)
+    try {
+      agent.inbox.remove(next.id)
+      agent.send(next, 'next-turn', true)
+    } catch (error) {
+      rt.warn('ds-bot: waiting message in %s not woken: %s', agent.id, error)
+    }
+  })
 
   Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, roomWorkView, turnsView, steeredView, callDetail, doingOf, stopRoomTurn, releaseBot, markSteerCut, hasSubagents, stopSubagents })
 }
