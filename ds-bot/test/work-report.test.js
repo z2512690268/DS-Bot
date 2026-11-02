@@ -223,7 +223,9 @@ test('needsYou is the one list of what waits for the user', async (t) => {
   assert.deepEqual(items.map(item => item.kind).sort(), ['answer', 'blocked'])
   const blocked = items.find(item => item.kind === 'blocked')
   assert.equal(blocked.work, 'w1')
-  assert.equal(blocked.bot, 'Chief')
+  // The row opens the Bot that is blocked, not the one that asked for the work.
+  assert.equal(blocked.bot, 'Writer')
+  assert.equal(blocked.askedBy, 'Chief')
   assert.equal(blocked.summary, 'no access')
   const asked = items.find(item => item.kind === 'answer')
   assert.equal(asked.question, '选哪个方向？')

@@ -3,7 +3,8 @@
 // every answer field opens at once or one at a time, a work can be ignored, and a
 // second click clears the works the user does not want to act on. An open question
 // shows its answers as buttons plus a field for an answer of the user's own, so it is
-// answered here without opening the chat; any row opens the Bot it belongs to. The same
+// answered here without opening the chat; any row opens the Bot it belongs to, and a
+// blocked or reviewed work carries a field to answer the Bot that is stuck. The same
 // block answers the other two questions: whether the system is well (shown only when it
 // is not) and what happened to one piece of work (its timeline, opened from its row).
 import { createElement as h, useState } from 'react'
@@ -81,7 +82,7 @@ function AnswerBox({ item, onAnswer }) {
     send({ selected: [], custom })
     setText('')
   }
-  return h('div', { className: 'bt-needs-answers' },
+  return h('div', { className: 'bt-needs-answers bt-needs-answer-box' },
     options.map(option => h('button', {
       key: option.label,
       type: 'button',
@@ -111,7 +112,50 @@ function AnswerBox({ item, onAnswer }) {
       }, zh() ? '发送' : 'Send')))
 }
 
-export function NeedsYou({ items: all_items, health, onOpen, onAnswer, onIgnore }) {
+// A blocked Bot is not answered by a button: it needs a word from the user to go on,
+// so its row carries a field for one and a retry, beside opening its chat.
+function ReplyBox({ item, onSend }) {
+  const [text, setText] = useState('')
+  const send = (said) => {
+    if (item.sessionId === undefined) return
+    onSend?.(item.sessionId, said)
+  }
+  const submit = () => {
+    const said = text.trim()
+    if (said === '') return
+    send(said)
+    setText('')
+  }
+  return h('div', { className: 'bt-needs-answers' },
+    h('button', {
+      type: 'button',
+      className: 'bt-needs-answer',
+      onClick: (event) => { event.stopPropagation(); send(item.kind === 'review' ? 'Looks good, go on.' : 'Go on: this is handled, retry it.') },
+    }, zh() ? '继续' : 'Go on'),
+    h('span', { className: 'bt-needs-free' },
+      h('input', {
+        type: 'text',
+        value: text,
+        placeholder: zh() ? '回它一句…' : 'Say something…',
+        'aria-label': zh() ? '回复这个 Bot' : 'Reply to this Bot',
+        onChange: event => setText(event.target.value),
+        onKeyDown: (event) => {
+          if (event.key !== 'Enter') return
+          event.preventDefault()
+          event.stopPropagation()
+          submit()
+        },
+        onClick: event => event.stopPropagation(),
+      }),
+      h('button', {
+        type: 'button',
+        className: 'bt-needs-send',
+        disabled: text.trim() === '',
+        onClick: (event) => { event.stopPropagation(); submit() },
+      }, zh() ? '发送' : 'Send')))
+}
+
+export function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onIgnore }) {
   const items = Array.isArray(all_items) ? all_items : []
   const [open, setOpen] = useState({}) // per item: is its answer field shown
   const [all, setAll] = useState(false) // every answer field at once
@@ -192,6 +236,7 @@ export function NeedsYou({ items: all_items, health, onOpen, onAnswer, onIgnore 
               }, '×'),
             ]),
           item.kind === 'answer' && shown ? h(AnswerBox, { key: `answers-${index}`, item, onAnswer }) : null,
+          item.kind === 'blocked' || item.kind === 'review' ? h(ReplyBox, { key: `reply-${index}`, item, onSend }) : null,
           item.kind !== 'answer' && shownHistory ? h('ol', { className: 'bt-needs-history', 'aria-label': zh() ? '这件活的历史' : 'History of this work' },
             historyLines(item).map((line, at) => h('li', { key: at },
               h('span', { className: 'bt-needs-hist-time' }, line.time),

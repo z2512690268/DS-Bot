@@ -587,6 +587,10 @@ export function TeamSidebar(props) {
         void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer))
           .catch(error => actions.reportError?.(error, 'answer-question'))
       },
+      onSend: (sessionId, text) => {
+        void Promise.resolve(actions.send(sessionId, text))
+          .catch(error => actions.reportError?.(error, 'send'))
+      },
       onIgnore: (keys) => {
         void Promise.resolve(actions.dismissNeeds(keys))
           .catch(error => actions.reportError?.(error, 'needs-dismiss'))

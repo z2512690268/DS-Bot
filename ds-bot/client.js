@@ -10092,7 +10092,7 @@ function AnswerBox({ item, onAnswer }) {
   };
   return (0, import_react21.createElement)(
     "div",
-    { className: "bt-needs-answers" },
+    { className: "bt-needs-answers bt-needs-answer-box" },
     options.map((option) => (0, import_react21.createElement)("button", {
       key: option.label,
       type: "button",
@@ -10131,7 +10131,59 @@ function AnswerBox({ item, onAnswer }) {
     )
   );
 }
-function NeedsYou({ items: all_items, health, onOpen, onAnswer, onIgnore }) {
+function ReplyBox({ item, onSend }) {
+  const [text, setText] = (0, import_react21.useState)("");
+  const send = (said) => {
+    if (item.sessionId === void 0) return;
+    onSend?.(item.sessionId, said);
+  };
+  const submit = () => {
+    const said = text.trim();
+    if (said === "") return;
+    send(said);
+    setText("");
+  };
+  return (0, import_react21.createElement)(
+    "div",
+    { className: "bt-needs-answers" },
+    (0, import_react21.createElement)("button", {
+      type: "button",
+      className: "bt-needs-answer",
+      onClick: (event) => {
+        event.stopPropagation();
+        send(item.kind === "review" ? "Looks good, go on." : "Go on: this is handled, retry it.");
+      }
+    }, zh() ? "继续" : "Go on"),
+    (0, import_react21.createElement)(
+      "span",
+      { className: "bt-needs-free" },
+      (0, import_react21.createElement)("input", {
+        type: "text",
+        value: text,
+        placeholder: zh() ? "回它一句…" : "Say something…",
+        "aria-label": zh() ? "回复这个 Bot" : "Reply to this Bot",
+        onChange: (event) => setText(event.target.value),
+        onKeyDown: (event) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          event.stopPropagation();
+          submit();
+        },
+        onClick: (event) => event.stopPropagation()
+      }),
+      (0, import_react21.createElement)("button", {
+        type: "button",
+        className: "bt-needs-send",
+        disabled: text.trim() === "",
+        onClick: (event) => {
+          event.stopPropagation();
+          submit();
+        }
+      }, zh() ? "发送" : "Send")
+    )
+  );
+}
+function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onIgnore }) {
   const items = Array.isArray(all_items) ? all_items : [];
   const [open, setOpen] = (0, import_react21.useState)({});
   const [all, setAll] = (0, import_react21.useState)(false);
@@ -10229,6 +10281,7 @@ function NeedsYou({ items: all_items, health, onOpen, onAnswer, onIgnore }) {
             ]
           ),
           item.kind === "answer" && shown ? (0, import_react21.createElement)(AnswerBox, { key: `answers-${index}`, item, onAnswer }) : null,
+          item.kind === "blocked" || item.kind === "review" ? (0, import_react21.createElement)(ReplyBox, { key: `reply-${index}`, item, onSend }) : null,
           item.kind !== "answer" && shownHistory ? (0, import_react21.createElement)(
             "ol",
             { className: "bt-needs-history", "aria-label": zh() ? "这件活的历史" : "History of this work" },
@@ -10836,6 +10889,9 @@ function TeamSidebar(props) {
       onOpen: (id) => actions.openSession(id),
       onAnswer: (sessionId, questionId, answer) => {
         void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer)).catch((error) => actions.reportError?.(error, "answer-question"));
+      },
+      onSend: (sessionId, text) => {
+        void Promise.resolve(actions.send(sessionId, text)).catch((error) => actions.reportError?.(error, "send"));
       },
       onIgnore: (keys) => {
         void Promise.resolve(actions.dismissNeeds(keys)).catch((error) => actions.reportError?.(error, "needs-dismiss"));

@@ -608,10 +608,16 @@ export function install(rt) {
       const kind = workStateValue.state === 'person/review' ? 'review'
         : workStateValue.state === 'person/proposed' ? 'proposed'
           : 'blocked'
+      // The row opens the Bot that is blocked, not the one that asked: opening the
+      // asker's chat lands on the chat the user is already reading. A proposal has no
+      // blocked Bot, so it opens the one that would have done it.
+      const owner = work.proposal === undefined ? work.to ?? work.from : work.from
       items.push({
         kind,
-        botId: work.from,
-        bot: rt.botOf(work.from)?.name,
+        botId: owner,
+        bot: rt.botOf(owner)?.name,
+        sessionId: rt.chatOf(owner),
+        ...(work.proposal !== undefined || rt.botOf(work.from)?.name === undefined ? {} : { askedBy: rt.botOf(work.from)?.name }),
         work: id,
         since: workStateValue.since,
         ...(workStateValue.summary === undefined ? {} : { summary: workStateValue.summary }),

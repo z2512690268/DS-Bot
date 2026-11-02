@@ -33,15 +33,21 @@ runInNewContext(outputFiles[0].text, {
 const { NeedsYou, healthLineOf, historyLines } = module.exports
 
 const flat = (children) => children.flatMap(child => (Array.isArray(child) ? flat(child) : child === undefined || child === null || child === false ? [] : [child]))
-const nodes = node => (node !== null && typeof node === 'object' ? [node, ...flat(node.props?.children ?? []).flatMap(nodes)] : [])
+// The stand-in does not run components, so the walk does: a component element is
+// replaced by the tree its function returns, hooks keeping their first value.
+const nodes = (node) => {
+  if (node === null || typeof node !== 'object') return []
+  if (typeof node.type === 'function') return nodes(node.type(node.props))
+  return [node, ...flat(node.props?.children ?? []).flatMap(nodes)]
+}
 const textOf = node => flat(node.props?.children ?? []).map(child => (typeof child === 'string' ? child : textOf(child))).join('')
 const buttons = tree => nodes(tree).filter(node => node.type === 'button')
 const byText = (tree, text) => buttons(tree).find(node => textOf(node) === text)
 
 const items = () => [
   { kind: 'answer', botId: 'a', bot: 'Chief', sessionId: 'a', questionId: 'q1', question: 'Which way?', since: 1, key: 'answer:q1', options: [{ label: 'Left' }], allowCustom: true },
-  { kind: 'blocked', botId: 'a', bot: 'Chief', work: 'w1', summary: 'needs a key', since: 2, key: 'blocked:w1' },
-  { kind: 'review', botId: 'b', bot: 'Writer', work: 'w2', summary: 'done and usable', since: 3, key: 'review:w2' },
+  { kind: 'blocked', botId: 'b', bot: 'Writer', sessionId: 'b', work: 'w1', summary: 'needs a key', since: 2, key: 'blocked:w1', askedBy: 'Chief' },
+  { kind: 'review', botId: 'b', bot: 'Writer', sessionId: 'b', work: 'w2', summary: 'done and usable', since: 3, key: 'review:w2', askedBy: 'Chief' },
   { kind: 'proposed', botId: 'b', bot: 'Writer', work: 'w3', summary: 'rewrite the changelog', proposed: true, to: 'Tester', since: 4, key: 'proposed:w3' },
 ]
 
@@ -60,7 +66,7 @@ test('the block shows the whole inbox, not the first few rows', () => {
 
 test('the answer field is closed until the user opens one or all', () => {
   const tree = NeedsYou({ items: items(), onOpen() {}, onAnswer() {}, onIgnore() {} })
-  assert.equal(nodes(tree).some(node => node.props?.className === 'bt-needs-answers'), false)
+  assert.equal(nodes(tree).some(node => node.props?.className?.includes('bt-needs-answer-box') === true), false)
   assert.ok(byText(tree, 'Answer'), 'each question has its own answer toggle')
   assert.ok(byText(tree, 'Expand all'), 'and every field opens at once')
 })
@@ -84,6 +90,23 @@ test('ignoring several works at once sends every work key, never a question', ()
   close.props.onClick()
   assert.deepEqual([...ignored.at(-1)], ['blocked:w1'])
   assert.ok(row, 'the row is still rendered by this paint')
+})
+
+test('a blocked or reviewed row answers the Bot that is stuck, and a proposal does not', () => {
+  const sent = []
+  const tree = NeedsYou({
+    items: items(),
+    onOpen() {},
+    onAnswer() {},
+    onSend: (sessionId, text) => sent.push([sessionId, text]),
+    onIgnore() {},
+  })
+  const calls = buttons(tree).filter(node => textOf(node) === 'Go on')
+  assert.equal(calls.length, 2, 'one for the blocked row and one for the review')
+  calls[0].props.onClick({ stopPropagation() {} })
+  assert.deepEqual(sent.map(([sessionId, text]) => [sessionId, text]), [['b', 'Go on: this is handled, retry it.']])
+  // The proposal has nothing to go on with: it is approved or ignored, not answered.
+  assert.equal(nodes(tree).filter(node => node.props?.['data-kind'] === 'proposed').length, 1)
 })
 
 test('a healthy team shows nothing at all', () => {
