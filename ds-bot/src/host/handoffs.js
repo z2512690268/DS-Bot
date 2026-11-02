@@ -112,13 +112,25 @@ export function install(rt) {
 
   // A report that names something only a user can do becomes a question card in the
   // chat of the Bot that asked, so the user answers it where the work was asked for
-  // instead of reading it as one more line of the answer. A card the Bot already has
-  // open wins: the user is being asked something else right now.
+  // instead of reading it as one more line of the answer. A card the Bot asked itself
+  // wins: the user is answering something else right now. A card another report opened
+  // is replaced, since the user has not seen it yet.
   function askAttention(work, name) {
     const report = work.report
-    if (report?.humanAction === undefined || report.state === 'dropped' || report.state === 'ready') return
+    if (report?.humanAction === undefined || report.state === 'dropped' || report.state === 'ready') {
+      rt.warn('ds-bot: no card for work %s: report %s has no user action', work.to, report?.state ?? 'missing')
+      return
+    }
     const chat = work.from === undefined ? undefined : rt.chatOf(work.from)
-    if (chat === undefined || state.questions?.[chat] !== undefined) return
+    if (chat === undefined) {
+      rt.warn('ds-bot: no card for work %s: the asker %s has no chat', work.to, work.from)
+      return
+    }
+    const open = state.questions?.[chat]
+    if (open !== undefined && open.attention === undefined) {
+      rt.warn('ds-bot: no card for work %s: %s already asks the user something', work.to, work.from)
+      return
+    }
     state.questions ??= {}
     state.questions[chat] = {
       id: randomUUID(),
@@ -137,7 +149,10 @@ export function install(rt) {
   // it goes on with. That work keeps waiting until a turn reads the answer (`taken`).
   function closeWork(id, name, text) {
     const work = works()[id]
-    if (work === undefined) return undefined
+    if (work === undefined) {
+      rt.warn('ds-bot: %s answered work %s, which was not open any more', name, id)
+      return undefined
+    }
     askAttention(work, name)
     delete works()[id]
     // What it still waits for comes back to it alone.

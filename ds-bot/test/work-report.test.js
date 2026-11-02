@@ -207,3 +207,19 @@ test('sweeping marks the stale work, and the Bot that asked reads why it waits',
   assert.equal(rt.sweepStalled(Date.now()), false)
   assert.equal(rt.workState('fresh').state, 'working')
 })
+
+test('needsYou is the one list of what waits for the user', async (t) => {
+  const { rt, state } = await bench(t).start()
+  rt.openWork('w1', { from: 'a', to: 'b' })
+  rt.reportWork('w1', { state: 'blocked', summary: 'no access', human_action: '可以先打开文件吗？' })
+  state.questions[rt.chatOf('b')] = { id: 'q1', question: '选哪个方向？', options: [{ label: '左' }], allowCustom: true, askedAt: 5 }
+  const items = rt.needsYou()
+  assert.deepEqual(items.map(item => item.kind).sort(), ['answer', 'blocked'])
+  const blocked = items.find(item => item.kind === 'blocked')
+  assert.equal(blocked.work, 'w1')
+  assert.equal(blocked.bot, 'Chief')
+  assert.equal(blocked.summary, 'no access')
+  const asked = items.find(item => item.kind === 'answer')
+  assert.equal(asked.question, '选哪个方向？')
+  assert.equal(asked.bot, 'Writer')
+})
