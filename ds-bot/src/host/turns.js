@@ -591,6 +591,8 @@ export function install(rt) {
         entry.later = []
         entry.steeredAt = undefined
         entry.carried = false
+        // One proposal per turn, counted on the turn itself.
+        entry.proposed = 0
         let claimedPending
         let claimedPendingText
         if (entry.pending !== undefined) {

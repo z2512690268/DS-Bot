@@ -85,6 +85,7 @@ dsh-superagent 的做法是把这两件事都变成字段：结果带 `state`（
   - `off`：只能做 `asked` / `delegated`，发起的请求被拒绝，什么也不记。
   - `observe`：请求**只记录不推进**，记成一件 `proposed` 的活（没有租约，不会被判停滞），出现在 `needsYou()` 的「我本来会做」一组里，工具结果告诉 Bot 不要重发。用户可以**批准**（`approve-proposal`）：这条提议变成真的派活，请求名以提议为名，重启/重复批准都不会发第二次；也可以忽略。
   - `auto`：照常发送。
+  - `propose` 工具：Bot 在**群里没被点名**的回合里，把看到的具体活记成一条提议（标题 + 一句理由），不执行、不发给任何 Bot，进「我本来会做」；每回合最多一条。私聊、被点名的回合、由管理员主持的回合都不生效。
 - 什么算「Bot 自己发起」由回合推导：它在回答哪件活就随那件活；用户的私聊、用户点名、别的 Bot 派活都是 `asked` / `delegated`；群聊里由管理员主持的那一轮也是 asked，没被点名的成员在轮次里顺带发起的才算 `proposed`。
 - 引用、转发、文件、网页都是数据，不构成请求。
 
@@ -92,7 +93,8 @@ dsh-superagent 的做法是把这两件事都变成字段：结果带 `state`（
 
 - 一件活关掉时，在 `state.workLog`（最多 500 条）留一行：`final`（最终状态）、`turns`（回合数）、`ms`（开始到结束的时长）、`authority`、`results`、`history`。
 - `turns` 由回答这件活的回合累加。
-- `rt.workStats()` 只读地给出汇总（`closed`、`open`、`byFinal`、`turns`、`avgMs`），`state` 负载里的 `workStats` 就是它。
+- `rt.workStats()` 只读地给出汇总（`closed`、`open`、`byFinal`、`turns`、`avgMs`），以及最近 24 小时的 `day`（关闭数、中位时长、停滞数、投递/回答失败数）；`state` 负载里的 `workStats` 就是它。
+- 面板把 `day` 折成一行安静摘要，只有当天有事时才出现。
 - 不做仪表盘。
 
 ### 收件箱
@@ -105,6 +107,7 @@ dsh-superagent 的做法是把这两件事都变成字段：结果带 `state`（
 ### 面板的健康与历史
 
 - `rt.workHealth()`：停滞的活数、最近一小时的投递失败数、回答失败数；全为 0 时面板不占位。停滞数与 `needsYou()` 用同一套可见性规则，被用户 dismiss 的停滞不再计入。
+- 面板另有一行 24 小时摘要（关闭数、中位时长、停滞、失败），安静的日子不出现。
 - `rt.workHistory(id)`：一件活从创建到结束的时间线（`created` / `proposed` / 各次 `report` / `stalled` / `closed`），开着的活读记录，关掉的活读 `workLog`；`needsYou()` 的工作条目也带上它，面板在行内展开。
 
 ### 并发

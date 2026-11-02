@@ -332,6 +332,22 @@ export function install(rt) {
   }))
 
   rt.teamTools.push(defineTool({
+    name: 'propose',
+    description: 'Record a piece of work you would do on your own, instead of doing it. Only in a group round nobody named you in, and at most one per turn: the user sees it under "Needs you" and approves it, which then asks you to do it in your own chat. Use it when the round gives you a concrete idea the user did not ask you for; when the work is yours, do it.',
+    parameters: {
+      title: { type: 'string', required: true, description: 'What you would do, in one short line, in the language the user writes.' },
+      reason: { type: 'string', description: 'One sentence on why it is worth doing, in the language the user writes.' },
+    },
+    output,
+    async execute(args, exec) {
+      await rt.load()
+      const result = rt.recordProposal(exec, args)
+      if (result.error !== undefined) return result.error
+      return `Recorded as a proposal (${result.id}). Nothing runs and no Bot was messaged: the user sees it under "Needs you" and can approve or ignore it. Do not propose it again this turn.`
+    },
+  }))
+
+  rt.teamTools.push(defineTool({
     name: 'stop_bot',
     description: 'Main Bot only. Stop another Bot\'s running turn immediately — when it must not finish a dangerous action and a message_bot warning is not enough. Its queued messages are dropped with the turn. It is then told why in a new turn, whose reply comes back to you.',
     parameters: {
