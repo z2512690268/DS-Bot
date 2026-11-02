@@ -409,14 +409,22 @@ export function install(rt) {
   // summary needs to answer "does anything need me now".
   const needsYou = () => {
     const items = []
+    const botOfChat = (sessionId) => {
+      const known = rt.selfOf?.(sessionId)
+      if (known !== undefined) return known
+      return Object.keys(state.bots).find(botId => rt.chatOf(botId) === sessionId)
+    }
     for (const [sessionId, question] of Object.entries(state.questions ?? {})) {
-      const botId = rt.selfOf?.(sessionId)
+      const botId = botOfChat(sessionId)
       items.push({
         kind: 'answer',
         botId,
         bot: rt.botOf(botId)?.name,
+        sessionId,
+        questionId: question.id,
         question: question.question,
         since: question.askedAt,
+        ...(question.options?.length > 0 ? { options: question.options.map(option => ({ label: option.label })) } : {}),
         ...(question.detail === undefined ? {} : { detail: question.detail }),
       })
     }

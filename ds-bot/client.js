@@ -2588,6 +2588,9 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-text{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-needs-bot{font-size:11px;color:color-mix(in srgb,var(--bt-ink) 46%,transparent);white-space:nowrap}
 .bt-needs-more{font-size:11px;color:color-mix(in srgb,var(--bt-ink) 50%,transparent);padding-left:6px}
+.bt-needs-answers{display:flex;flex-wrap:wrap;gap:4px;padding:0 6px 4px 18px}
+.bt-needs-answer{font:inherit;font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid color-mix(in srgb,var(--bt-accent) 35%,transparent);background:color-mix(in srgb,var(--bt-accent) 10%,transparent);color:var(--bt-accent);cursor:pointer}
+.bt-needs-answer:hover{background:color-mix(in srgb,var(--bt-accent) 20%,transparent)}
 
 /* Chromium ignores ::-webkit-scrollbar when scrollbar-width or scrollbar-color (inherited) is non-auto. */
 .bt-side:not(.bt-rail)>.bt-list{margin-right:-12px;scrollbar-gutter:stable;scrollbar-width:auto;scrollbar-color:auto}
@@ -9976,53 +9979,72 @@ function installFrameWatch(frame) {
 
 // src/client/need-you.js
 var import_react21 = require("react");
-var KIND = {
-  answer: "Waits for your answer",
-  blocked: "Blocked",
-  review: "Ready to review"
+var zh = () => language().startsWith("zh");
+var kindOf = (kind) => {
+  if (kind === "answer") return zh() ? "等你回答" : "Waits for your answer";
+  if (kind === "blocked") return zh() ? "受阻" : "Blocked";
+  return zh() ? "待验收" : "Ready to review";
 };
 var lineOf = (item) => {
   if (item.kind === "answer") return item.question ?? "";
   return item.summary ?? item.detail ?? "";
 };
-function NeedsYou({ items, onOpen }) {
+function NeedsYou({ items, onOpen, onAnswer }) {
   if (!Array.isArray(items) || items.length === 0) return null;
-  const shown = items.slice(0, 5);
+  const shown = items.slice(0, 4);
   const more = items.length - shown.length;
   return (0, import_react21.createElement)(
     "section",
-    { className: "bt-needs", "aria-label": t("Needs you") },
+    { className: "bt-needs", "aria-label": zh() ? "需要你" : "Needs you" },
     (0, import_react21.createElement)(
       "div",
       { className: "bt-needs-head" },
-      (0, import_react21.createElement)("span", { className: "bt-needs-title" }, t("Needs you")),
+      (0, import_react21.createElement)("span", { className: "bt-needs-title" }, zh() ? "需要你" : "Needs you"),
       (0, import_react21.createElement)("span", { className: "bt-needs-count" }, String(items.length))
     ),
     (0, import_react21.createElement)(
       "ul",
       { className: "bt-needs-list" },
-      shown.map((item, index) => (0, import_react21.createElement)(
-        "li",
-        { key: `${item.kind}-${item.work ?? item.botId ?? index}` },
-        (0, import_react21.createElement)(
-          "button",
-          {
-            type: "button",
-            className: "bt-needs-row",
-            "data-kind": item.kind,
-            title: [item.bot, lineOf(item)].filter(Boolean).join(" · "),
-            onClick: () => {
-              if (item.botId !== void 0) onOpen?.(item.botId);
-            }
-          },
-          (0, import_react21.createElement)("span", { className: "bt-needs-mark", "aria-hidden": true }),
-          (0, import_react21.createElement)("span", { className: "bt-needs-kind" }, t(KIND[item.kind] ?? item.kind)),
-          (0, import_react21.createElement)("span", { className: "bt-needs-text" }, lineOf(item)),
-          item.bot === void 0 ? null : (0, import_react21.createElement)("span", { className: "bt-needs-bot" }, item.bot)
-        )
-      ))
+      shown.map((item, index) => {
+        const options = item.kind === "answer" && Array.isArray(item.options) ? item.options.slice(0, 3) : [];
+        return (0, import_react21.createElement)(
+          "li",
+          { key: `${item.kind}-${item.work ?? item.questionId ?? index}` },
+          (0, import_react21.createElement)(
+            "button",
+            {
+              type: "button",
+              className: "bt-needs-row",
+              "data-kind": item.kind,
+              title: [item.bot, lineOf(item)].filter(Boolean).join(" · "),
+              onClick: () => {
+                if (item.botId !== void 0) onOpen?.(item.botId);
+              }
+            },
+            (0, import_react21.createElement)("span", { className: "bt-needs-mark", "aria-hidden": true }),
+            (0, import_react21.createElement)("span", { className: "bt-needs-kind" }, kindOf(item.kind)),
+            (0, import_react21.createElement)("span", { className: "bt-needs-text" }, lineOf(item)),
+            item.bot === void 0 ? null : (0, import_react21.createElement)("span", { className: "bt-needs-bot" }, item.bot)
+          ),
+          options.length === 0 ? null : (0, import_react21.createElement)(
+            "div",
+            { className: "bt-needs-answers" },
+            options.map((option) => (0, import_react21.createElement)("button", {
+              key: option.label,
+              type: "button",
+              className: "bt-needs-answer",
+              onClick: (event) => {
+                event.stopPropagation();
+                if (item.sessionId !== void 0 && item.questionId !== void 0) {
+                  onAnswer?.(item.sessionId, item.questionId, option.label);
+                }
+              }
+            }, option.label))
+          )
+        );
+      })
     ),
-    more > 0 ? (0, import_react21.createElement)("div", { className: "bt-needs-more" }, t("{count} more", { count: more })) : null
+    more > 0 ? (0, import_react21.createElement)("div", { className: "bt-needs-more" }, zh() ? `还有 ${more} 条` : `${more} more`) : null
   );
 }
 
@@ -10611,7 +10633,13 @@ function TeamSidebar(props) {
     top,
     wideContent && roster.readOnly ? (0, import_react22.createElement)("div", { className: "bt-hint bt-read-only", role: "status" }, hostText(roster.readOnly)) : null,
     // What waits for the user, above the team: a healthy team shows nothing here.
-    wideContent ? (0, import_react22.createElement)(NeedsYou, { items: roster.needsYou ?? [], onOpen: (id) => actions.openSession(id) }) : null,
+    wideContent ? (0, import_react22.createElement)(NeedsYou, {
+      items: roster.needsYou ?? [],
+      onOpen: (id) => actions.openSession(id),
+      onAnswer: (sessionId, questionId, label) => {
+        void Promise.resolve(actions.answerQuestion(sessionId, questionId, { selected: [label], custom: "" })).catch((error) => actions.reportError?.(error, "answer-question"));
+      }
+    }) : null,
     (0, import_react22.createElement)(
       "div",
       { ref: listRef, className: "bt-list", role: "region", "aria-label": t("Bot list") },
@@ -15684,7 +15712,7 @@ function KeptPrivateSection({ roster, actions, run: run2, Section, Row: Row3 }) 
 var HOUR = 0;
 var OWNER = 1;
 var MODEL = 2;
-var KIND2 = 3;
+var KIND = 3;
 var HOUR_MS = 36e5;
 var DAY_MS = 864e5;
 var RANGES = [
@@ -15792,7 +15820,7 @@ function summarize(view, range, keep = () => true, seriesOf = () => "all") {
     bucket.stacks.set(series, (bucket.stacks.get(series) ?? 0) + tokensOf(row));
     addTo(result.owners, row[OWNER], row);
     addTo(result.models, row[MODEL], row);
-    addTo(result.kinds, row[KIND2], row);
+    addTo(result.kinds, row[KIND], row);
   }
   return result;
 }

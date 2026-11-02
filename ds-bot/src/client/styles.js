@@ -138,6 +138,9 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-text{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-needs-bot{font-size:11px;color:color-mix(in srgb,var(--bt-ink) 46%,transparent);white-space:nowrap}
 .bt-needs-more{font-size:11px;color:color-mix(in srgb,var(--bt-ink) 50%,transparent);padding-left:6px}
+.bt-needs-answers{display:flex;flex-wrap:wrap;gap:4px;padding:0 6px 4px 18px}
+.bt-needs-answer{font:inherit;font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid color-mix(in srgb,var(--bt-accent) 35%,transparent);background:color-mix(in srgb,var(--bt-accent) 10%,transparent);color:var(--bt-accent);cursor:pointer}
+.bt-needs-answer:hover{background:color-mix(in srgb,var(--bt-accent) 20%,transparent)}
 
 /* Chromium ignores ::-webkit-scrollbar when scrollbar-width or scrollbar-color (inherited) is non-auto. */
 .bt-side:not(.bt-rail)>.bt-list{margin-right:-12px;scrollbar-gutter:stable;scrollbar-width:auto;scrollbar-color:auto}

@@ -579,7 +579,14 @@ export function TeamSidebar(props) {
     top,
     wideContent && roster.readOnly ? h('div', { className: 'bt-hint bt-read-only', role: 'status' }, hostText(roster.readOnly)) : null,
     // What waits for the user, above the team: a healthy team shows nothing here.
-    wideContent ? h(NeedsYou, { items: roster.needsYou ?? [], onOpen: id => actions.openSession(id) }) : null,
+    wideContent ? h(NeedsYou, {
+      items: roster.needsYou ?? [],
+      onOpen: id => actions.openSession(id),
+      onAnswer: (sessionId, questionId, label) => {
+        void Promise.resolve(actions.answerQuestion(sessionId, questionId, { selected: [label], custom: '' }))
+          .catch(error => actions.reportError?.(error, 'answer-question'))
+      },
+    }) : null,
     h('div', { ref: listRef, className: 'bt-list', role: 'region', 'aria-label': t('Bot list') },
       wideContent ? (main ? h(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : h('div', { className: 'bt-hint' }, uiNow.bootFailed ? bootHint() : t('Setting up your Main Bot…'))) : null,
       order.map(entry => (entry.kind === 'bot'
