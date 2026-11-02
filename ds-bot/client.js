@@ -2620,6 +2620,10 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-answers{display:flex;flex-wrap:wrap;gap:4px;padding:0 6px 4px 18px}
 .bt-needs-answer{font:inherit;font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid color-mix(in srgb,var(--bt-accent) 35%,transparent);background:color-mix(in srgb,var(--bt-accent) 10%,transparent);color:var(--bt-accent);cursor:pointer}
 .bt-needs-answer:hover{background:color-mix(in srgb,var(--bt-accent) 20%,transparent)}
+.bt-needs-free{display:flex;align-items:center;gap:4px;flex:1 1 auto;min-width:0}
+.bt-needs-free input{flex:1 1 auto;min-width:0;font:inherit;font-size:11px;padding:2px 6px;border-radius:6px;border:1px solid color-mix(in srgb,var(--bt-ink) 18%,transparent);background:transparent;color:inherit}
+.bt-needs-send{font:inherit;font-size:11px;padding:2px 8px;border-radius:6px;border:1px solid color-mix(in srgb,var(--bt-accent) 40%,transparent);background:transparent;color:var(--bt-accent);cursor:pointer}
+.bt-needs-send:disabled{opacity:.4;cursor:default}
 
 /* Chromium ignores ::-webkit-scrollbar when scrollbar-width or scrollbar-color (inherited) is non-auto. */
 .bt-side:not(.bt-rail)>.bt-list{margin-right:-12px;scrollbar-gutter:stable;scrollbar-width:auto;scrollbar-color:auto}
@@ -10023,6 +10027,60 @@ var lineOf = (item) => {
   if (item.kind === "answer") return item.question ?? "";
   return item.summary ?? item.detail ?? "";
 };
+function AnswerBox({ item, onAnswer }) {
+  const [text, setText] = (0, import_react21.useState)("");
+  const options = Array.isArray(item.options) ? item.options.slice(0, 3) : [];
+  const send = (answer) => {
+    if (item.sessionId === void 0 || item.questionId === void 0) return;
+    onAnswer?.(item.sessionId, item.questionId, answer);
+  };
+  const submit = () => {
+    const custom = text.trim();
+    if (custom === "") return;
+    send({ selected: [], custom });
+    setText("");
+  };
+  return (0, import_react21.createElement)(
+    "div",
+    { className: "bt-needs-answers" },
+    options.map((option) => (0, import_react21.createElement)("button", {
+      key: option.label,
+      type: "button",
+      className: "bt-needs-answer",
+      onClick: (event) => {
+        event.stopPropagation();
+        send({ selected: [option.label], custom: "" });
+      }
+    }, option.label)),
+    item.allowCustom === false ? null : (0, import_react21.createElement)(
+      "span",
+      { className: "bt-needs-free" },
+      (0, import_react21.createElement)("input", {
+        type: "text",
+        value: text,
+        placeholder: zh() ? "自己写…" : "Write your own…",
+        "aria-label": zh() ? "自己写一个回答" : "Write your own answer",
+        onChange: (event) => setText(event.target.value),
+        onKeyDown: (event) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          event.stopPropagation();
+          submit();
+        },
+        onClick: (event) => event.stopPropagation()
+      }),
+      (0, import_react21.createElement)("button", {
+        type: "button",
+        className: "bt-needs-send",
+        disabled: text.trim() === "",
+        onClick: (event) => {
+          event.stopPropagation();
+          submit();
+        }
+      }, zh() ? "发送" : "Send")
+    )
+  );
+}
 function NeedsYou({ items, onOpen, onAnswer }) {
   if (!Array.isArray(items) || items.length === 0) return null;
   const shown = items.slice(0, 4);
@@ -10039,44 +10097,27 @@ function NeedsYou({ items, onOpen, onAnswer }) {
     (0, import_react21.createElement)(
       "ul",
       { className: "bt-needs-list" },
-      shown.map((item, index) => {
-        const options = item.kind === "answer" && Array.isArray(item.options) ? item.options.slice(0, 3) : [];
-        return (0, import_react21.createElement)(
-          "li",
-          { key: `${item.kind}-${item.work ?? item.questionId ?? index}` },
-          (0, import_react21.createElement)(
-            "button",
-            {
-              type: "button",
-              className: "bt-needs-row",
-              "data-kind": item.kind,
-              title: [item.bot, lineOf(item)].filter(Boolean).join(" · "),
-              onClick: () => {
-                if (item.botId !== void 0) onOpen?.(item.botId);
-              }
-            },
-            (0, import_react21.createElement)("span", { className: "bt-needs-mark", "aria-hidden": true }),
-            (0, import_react21.createElement)("span", { className: "bt-needs-kind" }, kindOf(item.kind)),
-            (0, import_react21.createElement)("span", { className: "bt-needs-text" }, lineOf(item)),
-            item.bot === void 0 ? null : (0, import_react21.createElement)("span", { className: "bt-needs-bot" }, item.bot)
-          ),
-          options.length === 0 ? null : (0, import_react21.createElement)(
-            "div",
-            { className: "bt-needs-answers" },
-            options.map((option) => (0, import_react21.createElement)("button", {
-              key: option.label,
-              type: "button",
-              className: "bt-needs-answer",
-              onClick: (event) => {
-                event.stopPropagation();
-                if (item.sessionId !== void 0 && item.questionId !== void 0) {
-                  onAnswer?.(item.sessionId, item.questionId, option.label);
-                }
-              }
-            }, option.label))
-          )
-        );
-      })
+      shown.map((item, index) => (0, import_react21.createElement)(
+        "li",
+        { key: `${item.kind}-${item.work ?? item.questionId ?? index}` },
+        (0, import_react21.createElement)(
+          "button",
+          {
+            type: "button",
+            className: "bt-needs-row",
+            "data-kind": item.kind,
+            title: [item.bot, lineOf(item)].filter(Boolean).join(" · "),
+            onClick: () => {
+              if (item.botId !== void 0) onOpen?.(item.botId);
+            }
+          },
+          (0, import_react21.createElement)("span", { className: "bt-needs-mark", "aria-hidden": true }),
+          (0, import_react21.createElement)("span", { className: "bt-needs-kind" }, kindOf(item.kind)),
+          (0, import_react21.createElement)("span", { className: "bt-needs-text" }, lineOf(item)),
+          item.bot === void 0 ? null : (0, import_react21.createElement)("span", { className: "bt-needs-bot" }, item.bot)
+        ),
+        item.kind === "answer" ? (0, import_react21.createElement)(AnswerBox, { key: "answers", item, onAnswer }) : null
+      ))
     ),
     more > 0 ? (0, import_react21.createElement)("div", { className: "bt-needs-more" }, zh() ? `还有 ${more} 条` : `${more} more`) : null
   );
@@ -10670,8 +10711,8 @@ function TeamSidebar(props) {
     wideContent ? (0, import_react22.createElement)(NeedsYou, {
       items: roster.needsYou ?? [],
       onOpen: (id) => actions.openSession(id),
-      onAnswer: (sessionId, questionId, label) => {
-        void Promise.resolve(actions.answerQuestion(sessionId, questionId, { selected: [label], custom: "" })).catch((error) => actions.reportError?.(error, "answer-question"));
+      onAnswer: (sessionId, questionId, answer) => {
+        void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer)).catch((error) => actions.reportError?.(error, "answer-question"));
       }
     }) : null,
     (0, import_react22.createElement)(

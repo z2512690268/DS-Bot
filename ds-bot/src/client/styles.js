@@ -141,6 +141,10 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-answers{display:flex;flex-wrap:wrap;gap:4px;padding:0 6px 4px 18px}
 .bt-needs-answer{font:inherit;font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid color-mix(in srgb,var(--bt-accent) 35%,transparent);background:color-mix(in srgb,var(--bt-accent) 10%,transparent);color:var(--bt-accent);cursor:pointer}
 .bt-needs-answer:hover{background:color-mix(in srgb,var(--bt-accent) 20%,transparent)}
+.bt-needs-free{display:flex;align-items:center;gap:4px;flex:1 1 auto;min-width:0}
+.bt-needs-free input{flex:1 1 auto;min-width:0;font:inherit;font-size:11px;padding:2px 6px;border-radius:6px;border:1px solid color-mix(in srgb,var(--bt-ink) 18%,transparent);background:transparent;color:inherit}
+.bt-needs-send{font:inherit;font-size:11px;padding:2px 8px;border-radius:6px;border:1px solid color-mix(in srgb,var(--bt-accent) 40%,transparent);background:transparent;color:var(--bt-accent);cursor:pointer}
+.bt-needs-send:disabled{opacity:.4;cursor:default}
 
 /* Chromium ignores ::-webkit-scrollbar when scrollbar-width or scrollbar-color (inherited) is non-auto. */
 .bt-side:not(.bt-rail)>.bt-list{margin-right:-12px;scrollbar-gutter:stable;scrollbar-width:auto;scrollbar-color:auto}

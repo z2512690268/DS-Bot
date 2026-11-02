@@ -424,6 +424,7 @@ export function install(rt) {
         questionId: question.id,
         question: question.question,
         since: question.askedAt,
+        allowCustom: question.allowCustom !== false,
         ...(question.options?.length > 0 ? { options: question.options.map(option => ({ label: option.label })) } : {}),
         ...(question.detail === undefined ? {} : { detail: question.detail }),
       })
