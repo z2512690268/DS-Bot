@@ -390,6 +390,15 @@ export function install(rt) {
             await rt.save()
           }
           return ok(true)
+        case 'approve-proposal': {
+          // The user turns something a Bot would have done into work. The host sends it
+          // once, under the proposal's name, and the row leaves the list.
+          await rt.load()
+          const id = String(body.work ?? '')
+          if (id === '') return fail('Nothing to approve', 'bot/invalid')
+          const result = await rt.approveProposal(id)
+          return result.ok ? ok(true) : fail(result.error, result.code ?? 'bot/refused')
+        }
         case 'needs-dismiss': {
           // One list of items the user does not want to act on, sent in one request so
           // a whole inbox can be cleared without a round trip per row.

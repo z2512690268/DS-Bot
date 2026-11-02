@@ -591,6 +591,10 @@ export function TeamSidebar(props) {
         void Promise.resolve(actions.send(sessionId, text))
           .catch(error => actions.reportError?.(error, 'send'))
       },
+      onApprove: (id) => {
+        void Promise.resolve(actions.approveProposal(id))
+          .catch(error => actions.reportError?.(error, 'approve-proposal'))
+      },
       onIgnore: (keys) => {
         void Promise.resolve(actions.dismissNeeds(keys))
           .catch(error => actions.reportError?.(error, 'needs-dismiss'))

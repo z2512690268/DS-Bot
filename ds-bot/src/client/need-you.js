@@ -155,7 +155,7 @@ function ReplyBox({ item, onSend }) {
       }, zh() ? '发送' : 'Send')))
 }
 
-export function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onIgnore }) {
+export function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onApprove, onIgnore }) {
   const items = Array.isArray(all_items) ? all_items : []
   const [open, setOpen] = useState({}) // per item: is its answer field shown
   const [all, setAll] = useState(false) // every answer field at once
@@ -218,6 +218,13 @@ export function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, o
               'aria-expanded': shown,
               onClick: () => toggle(key),
             }, zh() ? '答' : 'Answer') : [
+              ...(item.kind === 'proposed' ? [h('button', {
+                key: 'approve',
+                type: 'button',
+                className: 'bt-needs-tool bt-needs-approve',
+                title: zh() ? '批准就等于替它发出这条请求' : 'Approving sends this request for it',
+                onClick: () => onApprove?.(item.work),
+              }, zh() ? '批准' : 'Approve')] : []),
               h('button', {
                 key: 'history',
                 type: 'button',

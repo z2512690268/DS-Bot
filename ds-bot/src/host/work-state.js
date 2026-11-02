@@ -27,7 +27,7 @@ export function workStateOf(work, at = Date.now()) {
   // Work a Bot started on its own, recorded instead of done: only the user can turn it
   // into work, so it waits next to the questions rather than under the running work.
   if (work.proposal !== undefined) {
-    return { state: 'person/proposed', since: work.proposal.at ?? work.at, proposed: true, summary: work.proposal.text }
+    return { state: 'person/proposed', since: work.proposal.at ?? work.at, proposed: true, summary: work.proposal.summary ?? work.proposal.text }
   }
   const { report } = work
   if (report !== undefined) {

@@ -1745,6 +1745,7 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     send: (sessionId, text) => after(call2("send", { sessionId: partFor(sessionId), text })),
     answerQuestion: (sessionId, questionId, answer) => after(call2("answer-question", { sessionId: partFor(sessionId), questionId, answer })),
     dismissNeeds: (keys) => after(call2("needs-dismiss", { keys })),
+    approveProposal: (id) => after(call2("approve-proposal", { work: id })),
     dismissQuestion: (sessionId) => after(call2("dismiss-question", { sessionId })),
     answerView: (sessionId, viewId, action, values) => after(call2("view-reply", { sessionId: partFor(sessionId), viewId, action, values })),
     dismissView: (sessionId) => after(call2("dismiss-view", { sessionId: partFor(sessionId) })),
@@ -10183,7 +10184,7 @@ function ReplyBox({ item, onSend }) {
     )
   );
 }
-function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onIgnore }) {
+function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onApprove, onIgnore }) {
   const items = Array.isArray(all_items) ? all_items : [];
   const [open, setOpen] = (0, import_react21.useState)({});
   const [all, setAll] = (0, import_react21.useState)(false);
@@ -10262,6 +10263,13 @@ function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onIgnore
               "aria-expanded": shown,
               onClick: () => toggle(key)
             }, zh() ? "答" : "Answer") : [
+              ...item.kind === "proposed" ? [(0, import_react21.createElement)("button", {
+                key: "approve",
+                type: "button",
+                className: "bt-needs-tool bt-needs-approve",
+                title: zh() ? "批准就等于替它发出这条请求" : "Approving sends this request for it",
+                onClick: () => onApprove?.(item.work)
+              }, zh() ? "批准" : "Approve")] : [],
               (0, import_react21.createElement)("button", {
                 key: "history",
                 type: "button",
@@ -10892,6 +10900,9 @@ function TeamSidebar(props) {
       },
       onSend: (sessionId, text) => {
         void Promise.resolve(actions.send(sessionId, text)).catch((error) => actions.reportError?.(error, "send"));
+      },
+      onApprove: (id) => {
+        void Promise.resolve(actions.approveProposal(id)).catch((error) => actions.reportError?.(error, "approve-proposal"));
       },
       onIgnore: (keys) => {
         void Promise.resolve(actions.dismissNeeds(keys)).catch((error) => actions.reportError?.(error, "needs-dismiss"));

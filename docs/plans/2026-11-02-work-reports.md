@@ -82,7 +82,7 @@ dsh-superagent 的做法是把这两件事都变成字段：结果带 `state`（
 - 每件活记 `authority`：`asked`（用户要的）、`delegated`（别的 Bot 派的）、`proposed`（Bot 自己想做的）。
 - 团队设置 `proactive: off | observe | auto`（默认 `observe`）决定 Bot 自发的活怎么办：
   - `off`：只能做 `asked` / `delegated`，发起的请求被拒绝，什么也不记。
-  - `observe`：请求**只记录不推进**，记成一件 `proposed` 的活（没有租约，不会被判停滞），出现在 `needsYou()` 的「我本来会做」一组里，工具结果告诉 Bot 不要重发。
+  - `observe`：请求**只记录不推进**，记成一件 `proposed` 的活（没有租约，不会被判停滞），出现在 `needsYou()` 的「我本来会做」一组里，工具结果告诉 Bot 不要重发。用户可以**批准**（`approve-proposal`）：这条提议变成真的派活，请求名以提议为名，重启/重复批准都不会发第二次；也可以忽略。
   - `auto`：照常发送。
 - 什么算「Bot 自己发起」由回合推导：它在回答哪件活就随那件活；用户的私聊、用户点名、别的 Bot 派活都是 `asked` / `delegated`；群聊里由管理员主持的那一轮也是 asked，没被点名的成员在轮次里顺带发起的才算 `proposed`。
 - 引用、转发、文件、网页都是数据，不构成请求。
@@ -98,6 +98,7 @@ dsh-superagent 的做法是把这两件事都变成字段：结果带 `state`（
 
 - `needsYou()` 的每一条都带 `key`（`answer:<questionId>` 或 `<kind>:<workId>`），面板据此一次处理多条。
 - `needs-dismiss` 接口接受一组 key：忽略的 `proposed` 活直接丢掉，`blocked` / `review` 的活只是从列表里隐藏，状态再变（`since` 晚于忽略时刻）就重新出现。
+- `approve-proposal` 接口把一条 `proposed` 的活变成真派活：记录本身变成那条请求（答案回到同一件活），原文整条保留（超过内联上限的不能批准，只能让 Bot 重提），发一次、幂等。
 - 客户端可以全部展开、逐条作答、逐条或全部忽略。
 
 ### 面板的健康与历史

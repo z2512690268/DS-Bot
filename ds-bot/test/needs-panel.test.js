@@ -109,6 +109,22 @@ test('a blocked or reviewed row answers the Bot that is stuck, and a proposal do
   assert.equal(nodes(tree).filter(node => node.props?.['data-kind'] === 'proposed').length, 1)
 })
 
+test('a proposal is approved from its row, and a blocked row offers no such thing', () => {
+  const approved = []
+  const tree = NeedsYou({
+    items: items(),
+    onOpen() {},
+    onAnswer() {},
+    onSend() {},
+    onApprove: id => approved.push(id),
+    onIgnore() {},
+  })
+  const buttonsWith = text => buttons(tree).filter(node => textOf(node) === text)
+  assert.equal(buttonsWith('Approve').length, 1, 'only the proposal can be approved')
+  buttonsWith('Approve')[0].props.onClick()
+  assert.deepEqual([...approved], ['w3'])
+})
+
 test('a healthy team shows nothing at all', () => {
   assert.equal(NeedsYou({ items: [], onOpen() {}, onAnswer() {}, onIgnore() {} }), null)
   assert.equal(NeedsYou({ onOpen() {} }), null)

@@ -107,6 +107,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     send: (sessionId, text) => after(call('send', { sessionId: partFor(sessionId), text })),
     answerQuestion: (sessionId, questionId, answer) => after(call('answer-question', { sessionId: partFor(sessionId), questionId, answer })),
     dismissNeeds: keys => after(call('needs-dismiss', { keys })),
+    approveProposal: id => after(call('approve-proposal', { work: id })),
     dismissQuestion: sessionId => after(call('dismiss-question', { sessionId })),
     answerView: (sessionId, viewId, action, values) => after(call('view-reply', { sessionId: partFor(sessionId), viewId, action, values })),
     dismissView: sessionId => after(call('dismiss-view', { sessionId: partFor(sessionId) })),

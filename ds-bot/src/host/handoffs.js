@@ -8,7 +8,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { TEXT_KEPT, WORK_LOG_MAX } from './constants.js'
+import { MESSAGE_INLINE_MAX, TEXT_KEPT, WORK_LOG_MAX } from './constants.js'
 import { headOf } from './text.js'
 import { leasePolicyOf, normalizeReport, proactiveOf, reportLine, stalledReport, waitsForUser, workStateOf } from './work-state.js'
 
@@ -181,6 +181,10 @@ export function install(rt) {
     if (earlier !== undefined) return earlier[0]
     const at = Date.now()
     const id = randomUUID()
+    // The whole message is kept, up to what a message may be inline: approving has to
+    // send exactly what the Bot would have sent. A longer one cannot be approved as it
+    // was, and the next line says so.
+    const whole = headOf(work, MESSAGE_INLINE_MAX)
     works()[id] = {
       from,
       to,
@@ -188,7 +192,7 @@ export function install(rt) {
       ...(works()[parent] !== undefined ? { parent } : {}),
       authority: 'proposed',
       lease: { at, by: to },
-      proposal: { at, text: kept, ...(work.length > TEXT_KEPT ? { length: work.length } : {}) },
+      proposal: { at, text: whole, summary: kept, ...(work.length > MESSAGE_INLINE_MAX ? { length: work.length } : {}) },
       open: [],
       results: [],
       at,
@@ -229,7 +233,65 @@ export function install(rt) {
     }
     const id = propose({ from, to, parent, text, room })
     if (id === undefined) return 'Not sent: there was nothing to record as a proposal.'
-    return `Not sent: this team runs in observe mode, so a Bot does not start work on its own. What you would have sent was recorded as a proposal (${id}) and the user sees it under "Needs you", next to the work it belongs to. Tell the user what you would have done and why; do not send it again.`
+    return `Not sent: this team runs in observe mode, so a Bot does not start work on its own. What you would have sent was recorded as a proposal (${id}) and the user sees it under "Needs you", next to the work it belongs to, and can approve it there. Tell the user what you would have done and why; do not send it again.`
+  }
+
+  // The user turns an observed proposal into real work: the proposal record becomes the
+  // request, so its answer comes back to the same work and no second one is opened. The
+  // request is named by the proposal, so a retry — after a lost answer or a restart that
+  // saved only half the change — never dispatches the same work twice.
+  async function approveProposal(id) {
+    const work = works()[id]
+    if (work === undefined || work.proposal === undefined) return { error: 'That proposal is not waiting any more.', code: 'bot/stale' }
+    if (work.from === undefined || work.to === undefined || rt.botOf(work.to) === undefined) {
+      return { error: 'The Bot this proposal was for is not on the team any more.', code: 'bot/stale' }
+    }
+    if (work.proposal.length !== undefined) {
+      return { error: `This proposal is ${work.proposal.length} characters long, more than can be sent inline, so it cannot be approved as it was. Ask the Bot to propose a shorter one.`, code: 'bot/refused' }
+    }
+    const identity = rt.requestIdentity({
+      caller: work.from,
+      context: 'approve',
+      name: `approve:${id}`,
+      payload: { work: id, to: work.to, text: work.proposal.text },
+    })
+    const seen = await rt.knownRequest(identity)
+    if (seen !== undefined) {
+      if (seen.status === 'replay') {
+        // It went out before and the saved state did not catch up: the work is the
+        // request now, so the proposal must not wait in the list a second time.
+        if (work.proposal !== undefined) {
+          delete work.proposal
+          work.authority = 'asked'
+          work.lease = { at: Date.now(), by: work.to }
+          pushHistory(work, { at: Date.now(), event: 'approved' })
+          save()
+        }
+        return { ok: true }
+      }
+      return { error: 'The approval may not have gone out (its outcome is not known), so it was not sent again. Check whether the Bot got it before approving again.', code: 'bot/conflict' }
+    }
+    const at = Date.now()
+    try {
+      await rt.admitRequest(identity, async () => {
+        const text = `[The user approved this request]\n\n${work.proposal.text}`
+        const receipt = await rt.deliver({ fromId: work.from, toId: work.to, role: 'request', exchangeId: id, text })
+        // Only once it went out does the record become the request: a delivery that
+        // failed leaves the proposal where the user can try again.
+        delete work.proposal
+        work.authority = 'asked'
+        work.lease = { at, by: work.to }
+        pushHistory(work, { at, event: 'approved' })
+        save()
+        return receipt
+      })
+    } catch (error) {
+      rt.warn('ds-bot: approved request %s was not sent: %s', id, error)
+      noteFault('delivery')
+      return { error: `The request was not sent: ${error?.message ?? error}`, code: 'bot/refused' }
+    }
+    save()
+    return { ok: true }
   }
 
   // A report that names something only a user can do becomes a question card in the
@@ -621,7 +683,7 @@ export function install(rt) {
         work: id,
         since: workStateValue.since,
         ...(workStateValue.summary === undefined ? {} : { summary: workStateValue.summary }),
-        ...(work.proposal !== undefined ? { proposed: true, to: rt.botOf(work.to)?.name } : {}),
+        ...(work.proposal !== undefined ? { proposed: true, to: rt.botOf(work.to)?.name, summary: work.proposal.summary ?? work.proposal.text } : {}),
         history: work.history ?? [],
       })
     }
@@ -740,5 +802,5 @@ export function install(rt) {
     return () => clearInterval(timer)
   }, 'ds-bot: mark work that stopped reporting')
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, noteWorkTurn, noteFault, workStats, workHistory, workHealth, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, approveProposal, noteWorkTurn, noteFault, workStats, workHistory, workHealth, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
 }
