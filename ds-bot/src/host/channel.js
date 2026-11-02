@@ -66,6 +66,9 @@ export function install(rt) {
     sideChats: rt.sideView?.() ?? {},
     // The team's DSH Agent (at most one): plain dsh Sessions, not Bots.
     agents: Object.values(state.agents),
+    // Everything waiting for the user in one list (handoffs.js needsYou): open
+    // question cards and work that came back blocked, failed or ready to review.
+    needsYou: rt.needsYou?.() ?? [],
     // Key names and who may use them; values never leave the host.
     secrets: rt.secretsView(),
     capabilities: rt.capabilityLibraryView(),
@@ -430,6 +433,30 @@ export function install(rt) {
           if (reply === undefined) return fail('Nothing to send', 'bot/invalid')
           // Claim the question before queueing so a second answer is refused.
           delete state.questions[sessionId]
+          // A card a report opened answers the Bot that could not go on: the answer
+          // goes to it as a new request, so the Bot that asked needs no turn to relay.
+          const attention = question.attention
+          if (attention?.ownerId !== undefined && attention?.askerId !== undefined && rt.botOf(attention.ownerId) !== undefined) {
+            const given = JSON.parse(reply.text).answers?.[0] ?? {}
+            const said = [...(given.selected ?? []), given.custom ?? ''].filter(Boolean).join(' / ')
+            const exchangeId = randomUUID()
+            try {
+              rt.openWork(exchangeId, { from: attention.askerId, to: attention.ownerId })
+              await rt.deliver({
+                fromId: attention.askerId,
+                toId: attention.ownerId,
+                text: `The user answered your question "${question.question}": ${said}`,
+                role: 'request',
+                exchangeId,
+              })
+            } catch (error) {
+              rt.dropWork(exchangeId)
+              state.questions[sessionId] ??= question
+              throw error
+            }
+            await rt.save()
+            return ok(true)
+          }
           try {
             await rt.ensureCapabilities(sessionId)
             const agent = await rt.resolveAgent(sessionId)

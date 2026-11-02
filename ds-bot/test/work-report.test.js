@@ -39,8 +39,8 @@ async function startHost(home) {
         id: sessionId,
         calls: [],
         status: 'idle',
-        followup() {},
-        steer() {},
+        followup(message) { this.calls.push(['followup', message]) },
+        steer(message) { this.calls.push(['steer', message]) },
         inject() {},
         cancel() {},
         async whenIdle() {},
@@ -67,11 +67,17 @@ async function startHost(home) {
     sessionTitle: { rename: async () => {} },
     sessions: { flush: async () => {} },
   })
+  let route
+  const register = ctx.connection.fetch.register
+  ctx.connection.fetch.register = (options) => { route = options; return register(options) }
   const rt = createRuntime(ctx, { home })
   const tool = (name, args, sessionId) => rt.teamTools.find(d => d.name === name).execute(args, { agent: { id: sessionId } })
+  const call = async (endpoint, payload) => (await route.fetch(new Request('http://localhost/api/bot', {
+    method: 'POST', body: JSON.stringify({ endpoint, payload }),
+  }))).json()
   // Loading once fills the Session-owner indexes turns.js filters events by.
   await tool('list_bots', {}, 'a')
-  return { rt, tool, home, state: rt.state, stop: () => ctx.dispose() }
+  return { rt, tool, call, agents, home, state: rt.state, stop: () => ctx.dispose() }
 }
 
 function bench(t) {
@@ -139,13 +145,36 @@ test('a report about no work is refused, and so is a state that is not one', asy
 test('a report that needs the user puts the question where the work was asked for', async (t) => {
   const { rt, state } = await bench(t).start()
   rt.openWork('w1', { from: 'a', to: 'b' })
-  rt.reportWork('w1', { state: 'blocked', summary: 'needs a key', human_action: 'Add the key to the vault' })
+  rt.reportWork('w1', {
+    state: 'blocked', summary: 'needs a key', human_action: '用哪一把钥匙？',
+    human_options: ['主钥匙', '备用钥匙'],
+  })
   rt.closeWork('w1', 'Writer', 'I cannot read the file.')
   const card = state.questions[rt.chatOf('a')]
-  assert.equal(card.question, 'Add the key to the vault')
+  assert.equal(card.question, '用哪一把钥匙？')
   assert.equal(card.detail, 'Writer: needs a key')
-  assert.deepEqual(card.options, [])
+  assert.deepEqual(card.options, [{ label: '主钥匙' }, { label: '备用钥匙' }])
   assert.equal(card.allowCustom, true)
+  assert.deepEqual(card.attention, { ownerId: 'b', askerId: 'a' })
+})
+
+test('the answer to one of those cards goes straight to the Bot that could not go on', async (t) => {
+  const { rt, state, call, agents } = await bench(t).start()
+  rt.openWork('w1', { from: 'a', to: 'b' })
+  rt.reportWork('w1', { state: 'blocked', summary: 'needs a key', human_action: '用哪一把钥匙？', human_options: ['主钥匙', '备用钥匙'] })
+  rt.closeWork('w1', 'Writer', 'I cannot read the file.')
+  const chat = rt.chatOf('a')
+  const card = state.questions[chat]
+  const answer = await call('answer-question', { sessionId: chat, questionId: card.id, answer: { selected: ['备用钥匙'] } })
+  assert.equal(answer.ok, true)
+  assert.equal(state.questions[chat], undefined)
+  // A new request from the Bot that asked to the Bot that could not go on, so the
+  // answer arrives as work instead of as a reply with nobody waiting for it.
+  const opened = Object.values(state.works).filter(work => work.from === 'a' && work.to === 'b')
+  assert.equal(opened.length, 1)
+  const woken = agents.get(rt.chatOf('b')).calls
+  assert.equal(woken.length, 1)
+  assert.match(JSON.stringify(woken[0][1]), /备用钥匙/)
 })
 
 test('a report with nothing for the user opens no question card', async (t) => {

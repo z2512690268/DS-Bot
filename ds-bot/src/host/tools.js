@@ -28,6 +28,9 @@ const HIDDEN_TOOLS = HIDDEN_TOOL_GROUPS.flat()
 const HIDDEN_SECTIONS = new Set([...HIDDEN_TOOLS.map(name => `tool:${name}`), 'tool:goal'])
 const GOAL_REFUSAL = 'Bot chats do not run /goal. To give a group a goal, use Set a goal in its + menu.'
 const DELEGATION_REFUSAL = 'Bots do not start subagents or workflows. Do the work yourself, or hand it to another Bot with message_bot.'
+// Turns the team may run at once before Bot-to-Bot messages stop steering into a
+// running turn. A user's own message never waits for this.
+const MAX_ACTIVE_TURNS = 8
 const MODE_PARAM = {
   type: 'string',
   enum: ROOM_MODES,
@@ -245,7 +248,11 @@ export function install(rt) {
         const joins = before !== undefined && agent.inbox?.remove?.(earlier.message.id) === true
         if (before !== undefined && !joins) long = await rt.attachLong(text, `Message from ${sender.name}.txt`) ?? long
         const working = rt.live.get(chat)?.turn !== undefined
-        const steer = (args.when !== 'queue' && !toUser) || (joins && earlier.steered)
+        // A team already running many turns at once carries no more work between
+        // steps: the message waits for the target's next turn instead, so a burst of
+        // Bots cannot crowd out the user, who always gets a turn of their own.
+        const saturated = (rt.activeTurns?.() ?? 0) >= MAX_ACTIVE_TURNS
+        const steer = (args.when !== 'queue' && !toUser && !saturated) || (joins && earlier.steered && !saturated)
         const exchangeId = joins ? earlier.message.source.exchangeId : randomUUID()
         if (joins) rt.forgetDelivery?.(exchangeId)
         else if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work })
@@ -294,6 +301,11 @@ export function install(rt) {
       },
       summary: { type: 'string', description: 'One sentence for the Bot that asked, at most 500 characters, in the language the user writes.' },
       human_action: { type: 'string', description: 'The one thing a user must do or decide, as a question in the language the user writes, at most 500 characters: the asking Bot shows it as the title of a question card. Only with blocked or failed. Not an order and not a label, for example "May I have read access to report.txt?"' },
+      human_options: {
+        type: 'array',
+        description: 'Two to four short answers the user may pick, in the language the user writes, when the decision has clear choices. The card shows them as buttons; the user can still write their own. Only with human_action.',
+        items: { type: 'string' },
+      },
     },
     output,
     async execute(args, exec) {

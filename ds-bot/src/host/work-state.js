@@ -58,7 +58,19 @@ export function normalizeReport(input = {}, at = Date.now()) {
   if (state === undefined) return { error: `A report is one of ${REPORT_STATES.join(', ')}.` }
   const summary = String(input.summary ?? '').replace(/\s+/g, ' ').trim().slice(0, 500)
   const humanAction = String(input.human_action ?? '').replace(/\s+/g, ' ').trim().slice(0, 500)
-  return { report: { state, ...(summary === '' ? {} : { summary }), ...(humanAction === '' ? {} : { humanAction }), at } }
+  const asked = Array.isArray(input.human_options) ? input.human_options : []
+  const humanOptions = [...new Set(asked
+    .map(option => String(typeof option === 'string' ? option : option?.label ?? '').replace(/\s+/g, ' ').trim())
+    .filter(label => label !== ''))].slice(0, 4)
+  return {
+    report: {
+      state,
+      ...(summary === '' ? {} : { summary }),
+      ...(humanAction === '' ? {} : { humanAction }),
+      ...(humanAction !== '' && humanOptions.length > 0 ? { humanOptions } : {}),
+      at,
+    },
+  }
 }
 
 /** How long a work may go without a report before the code marks it stale. */
@@ -73,7 +85,7 @@ export const STALL_MS = 30 * 60_000
 export function stalledReport(work, at = Date.now(), deadline = STALL_MS) {
   if (work === undefined) return undefined
   if (work.report !== undefined && work.report.state !== 'progress') return undefined
-  const since = work.progress?.at ?? work.at ?? at
+  const since = work.progress?.at ?? work.lease?.at ?? work.at ?? at
   if (at - since < deadline) return undefined
   const min = Math.max(1, Math.round((at - since) / 60_000))
   return { state: 'blocked', summary: `no progress for ${min} min`, at, stalled: true }

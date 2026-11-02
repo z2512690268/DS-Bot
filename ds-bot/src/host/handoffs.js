@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import { TEXT_KEPT } from './constants.js'
 import { headOf } from './text.js'
-import { normalizeReport, reportLine, stalledReport, workStateOf } from './work-state.js'
+import { normalizeReport, reportLine, stalledReport, waitsForUser, workStateOf } from './work-state.js'
 
 const minutes = since => {
   const count = Math.floor((Date.now() - since) / 60_000)
@@ -99,9 +99,13 @@ export function install(rt) {
   // `parent`: the work the sender was doing when it sent this one. `child`: the
   // session id of the subagent a run of this work belongs to — the run, not the
   // child, is the sub-work, so a child that is continued hands up a result per run.
-  function openWork(id, { from, to, parent, fromRoom, room, name, child }) {
+  // `authority`: `asked` when the user asked for it, `delegated` when another Bot did,
+  // `proposed` when a Bot started it on its own. It is context for people, not a gate:
+  // Bots act on messages, so the plugin has nothing to refuse at this point.
+  function openWork(id, { from, to, parent, fromRoom, room, name, child, authority }) {
     const above = parent === undefined ? undefined : works()[parent]
-    works()[id] = { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(room ? { room } : {}), ...(above ? { parent } : {}), ...(fromRoom ? { fromRoom } : {}), ...(name ? { name } : {}), ...(child ? { child } : {}), open: [], results: [], at: Date.now() }
+    const at = Date.now()
+    works()[id] = { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(room ? { room } : {}), ...(above ? { parent } : {}), ...(fromRoom ? { fromRoom } : {}), ...(name ? { name } : {}), ...(child ? { child } : {}), authority: authority ?? 'delegated', lease: { at, by: to }, open: [], results: [], at }
     if (above !== undefined) above.open.push(id)
     save()
   }
@@ -120,9 +124,12 @@ export function install(rt) {
       id: randomUUID(),
       question: report.humanAction,
       detail: `${name}: ${report.summary ?? report.state}`,
-      options: [],
+      options: (report.humanOptions ?? []).map(label => ({ label })),
       allowCustom: true,
       askedAt: Date.now(),
+      // The answer goes straight back to the Bot that could not go on, as a new
+      // request: the Bot that asked need not spend a turn to relay it.
+      attention: { ownerId: work.to, askerId: work.from },
     }
   }
 
@@ -366,12 +373,47 @@ export function install(rt) {
     if (error !== undefined) return { error }
     if (report.state === 'progress') work.progress = report
     else work.report = report
+    // A report is the owner saying it is still there: the lease moves with it.
+    work.lease = { at: report.at, by: work.to }
     save()
     return { report }
   }
 
   // The state of one work by id, for the tools and the panel.
   const workState = id => workStateOf(works()[id])
+
+  // Runs a turn in any Bot right now. Used to keep the team from fanning out into
+  // more parallel work than it can carry: a user's message always gets through.
+  const activeTurns = () => [...rt.live.values()].filter(entry => entry?.turn !== undefined).length
+
+  // Everything that waits for the user, in one list: the question cards the team has
+  // open, and the work that came back blocked or failed. It is what a panel or a
+  // summary needs to answer "does anything need me now".
+  const needsYou = () => {
+    const items = []
+    for (const [sessionId, question] of Object.entries(state.questions ?? {})) {
+      const botId = rt.selfOf?.(sessionId)
+      items.push({
+        kind: 'answer',
+        bot: rt.botOf(botId)?.name,
+        question: question.question,
+        since: question.askedAt,
+        ...(question.detail === undefined ? {} : { detail: question.detail }),
+      })
+    }
+    for (const [id, work] of Object.entries(works())) {
+      const workStateValue = workStateOf(work)
+      if (!waitsForUser(workStateValue.state)) continue
+      items.push({
+        kind: workStateValue.state === 'person/review' ? 'review' : 'blocked',
+        bot: rt.botOf(work.from)?.name,
+        work: id,
+        since: workStateValue.since,
+        ...(workStateValue.summary === undefined ? {} : { summary: workStateValue.summary }),
+      })
+    }
+    return items.sort((left, right) => (left.since ?? 0) - (right.since ?? 0))
+  }
 
   // Work that stopped reporting is marked stale, so the Bot that asked reads why it
   // still waits instead of waiting forever. Marking it costs no model call: the state
@@ -393,5 +435,5 @@ export function install(rt) {
     return () => clearInterval(timer)
   }, 'ds-bot: mark work that stopped reporting')
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, activeTurns, needsYou, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
 }
