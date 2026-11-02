@@ -292,8 +292,8 @@ export function install(rt) {
         enum: REPORT_STATES,
         description: '"progress": still working; "ready": done and usable; "blocked": needs a decision or something only a user can give; "failed": cannot be done; "dropped": nothing to do after all, and no user action is needed.',
       },
-      summary: { type: 'string', description: 'One sentence for the Bot that asked, at most 500 characters.' },
-      human_action: { type: 'string', description: 'One concrete thing a user must do or decide, in one sentence. Only with blocked or failed.' },
+      summary: { type: 'string', description: 'One sentence for the Bot that asked, at most 500 characters, in the language the user writes.' },
+      human_action: { type: 'string', description: 'The one thing a user must do or decide, as a question in the language the user writes, at most 500 characters: the asking Bot shows it as the title of a question card. Only with blocked or failed. Not an order and not a label, for example "May I have read access to report.txt?"' },
     },
     output,
     async execute(args, exec) {
