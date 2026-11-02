@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
-import { REPLY_KIND } from '../src/host/constants.js'
+import { REPLY_KIND, SOURCE_KIND } from '../src/host/constants.js'
 
 const team = () => ({
   version: 1,
@@ -100,6 +100,34 @@ async function start(seed) {
 }
 
 const textBlock = text => [{ type: 'text', text }]
+
+// The whole path a live reply takes: the request claim, the report, the answer and the
+// turn's end. The card has to be there afterwards, in the chat of the Bot that asked.
+test('a report from a claimed turn opens the card in the asker chat', async (t) => {
+  const { rt, tool, emit, stop } = await start(team())
+  t.after(stop)
+  await tool('message_bot', { to: 'Writer', message: 'write the thing' }, 'a')
+  const work = Object.keys(rt.state.works)[0]
+  assert.ok(work, 'the request opened a work')
+  emit('b', 'turn/start', { turn: 1 })
+  emit('b', 'user/message', {
+    content: textBlock('write the thing'),
+    source: { kind: SOURCE_KIND, role: 'request', exchangeId: work, senderSessionId: 'a', senderName: 'Chief' },
+  })
+  assert.match(await tool('report', {
+    state: 'blocked', summary: '验证需要你打开一个文件', human_action: '可以先打开 report-check.txt 吗？',
+    human_options: ['可以', '等会儿'],
+  }, 'b'), /Recorded blocked/)
+  emit('b', 'assistant/message', { message: { content: textBlock('我在等你选择。') } })
+  emit('b', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  await new Promise(resolve => setTimeout(resolve, 40))
+  const chat = rt.chatOf('a')
+  const card = rt.state.questions[chat]
+  assert.ok(card, `no card; questions: ${JSON.stringify(Object.keys(rt.state.questions))}; works: ${JSON.stringify(Object.keys(rt.state.works))}`)
+  assert.equal(card.question, '可以先打开 report-check.txt 吗？')
+  assert.deepEqual(card.options.map(option => option.label), ['可以', '等会儿'])
+  assert.deepEqual(card.attention, { ownerId: 'b', askerId: 'a' })
+})
 
 // A card that a report opened belongs to the user: the reply that comes with the
 // report must not answer it, or the user never sees the question.
