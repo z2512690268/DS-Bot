@@ -65,18 +65,45 @@ dsh-superagent 的做法是把这两件事都变成字段：结果带 `state`（
 
 ### 停滞的工作
 
-- 一件活 30 分钟没有新汇报（`progress` 也算一次汇报）时，插件把它标成 `blocked`，摘要写 `no progress for N min`，时间记作标记的时刻。
-- 每分钟查一次。不唤醒任何 Bot：唤醒要花一次模型调用，而用户和 Bot 都能从 `statusOf` 看到，下一条回答也会带上。
-- 已经报过结果的活不再标；`progress` 把计时清零。
+- 一件活 30 分钟没有新汇报（`progress` 也算一次汇报）时，插件把它标成 `blocked`，摘要写 `no progress for N min`，原因记 `no_progress`，时间记作标记的时刻。
+- 标记的同时做出动作，策略是常量（`work-state.js` 的 `LEASE_POLICY`），插件配置可覆盖：
+  - `leaseAction: 'notify'`（默认）：给派活的 Bot 一条 `stalled` 输入，它下一次回合读到「这件活停滞了」，可以自己做、转给别人或告诉用户。这条输入不要求回复，也不唤醒不在跑的 Bot。
+  - `leaseAction: 'redispatch'`：在通知之外，把同一件活交回做活的 Bot。重派用 `request_id`（以活为名）保证幂等：同一次扫描、重复扫描、重启后都不会执行第二次。
+  - 停滞只动作一次：标记留在活上，`report` 一来就清掉，下一次沉默才算新的一次停滞。
+- 每分钟查一次。已经报过结果的活不再标，`progress` 把计时清零。
 
 ### 租约
 
 - 一件活开出来就带上 `lease`（什么时候、交到谁手上），每次 `report`（含 `progress`）把它向后推。停滞判定读的是它，所以「还在干」和「没人管」能分开。
+- 默认 30 分钟；`workDeadlineMinutes` 可以改。
 
 ### 准入
 
 - 每件活记 `authority`：`asked`（用户要的）、`delegated`（别的 Bot 派的）、`proposed`（Bot 自己想做的）。
-- 它只是事实，不是闸门：DS Bot 里 Bot 只对消息行动，插件没有可以拒绝的入口。真正起作用的是团队规则里那条——引用、转发、文件、网页都是数据，不构成请求。
+- 团队设置 `proactive: off | observe | auto`（默认 `observe`）决定 Bot 自发的活怎么办：
+  - `off`：只能做 `asked` / `delegated`，发起的请求被拒绝，什么也不记。
+  - `observe`：请求**只记录不推进**，记成一件 `proposed` 的活（没有租约，不会被判停滞），出现在 `needsYou()` 的「我本来会做」一组里，工具结果告诉 Bot 不要重发。
+  - `auto`：照常发送。
+- 什么算「Bot 自己发起」由回合推导：它在回答哪件活就随那件活；用户的私聊、用户点名、别的 Bot 派活都是 `asked` / `delegated`；群聊里由管理员主持的那一轮也是 asked，没被点名的成员在轮次里顺带发起的才算 `proposed`。
+- 引用、转发、文件、网页都是数据，不构成请求。
+
+### 度量
+
+- 一件活关掉时，在 `state.workLog`（最多 500 条）留一行：`final`（最终状态）、`turns`（回合数）、`ms`（开始到结束的时长）、`authority`、`results`、`history`。
+- `turns` 由回答这件活的回合累加。
+- `rt.workStats()` 只读地给出汇总（`closed`、`open`、`byFinal`、`turns`、`avgMs`），`state` 负载里的 `workStats` 就是它。
+- 不做仪表盘。
+
+### 收件箱
+
+- `needsYou()` 的每一条都带 `key`（`answer:<questionId>` 或 `<kind>:<workId>`），面板据此一次处理多条。
+- `needs-dismiss` 接口接受一组 key：忽略的 `proposed` 活直接丢掉，`blocked` / `review` 的活只是从列表里隐藏，状态再变（`since` 晚于忽略时刻）就重新出现。
+- 客户端可以全部展开、逐条作答、逐条或全部忽略。
+
+### 面板的健康与历史
+
+- `rt.workHealth()`：停滞的活数、最近一小时的投递失败数、回答失败数；全为 0 时面板不占位。
+- `rt.workHistory(id)`：一件活从创建到结束的时间线（`created` / `proposed` / 各次 `report` / `stalled` / `closed`），开着的活读记录，关掉的活读 `workLog`；`needsYou()` 的工作条目也带上它，面板在行内展开。
 
 ### 并发
 
@@ -86,7 +113,7 @@ dsh-superagent 的做法是把这两件事都变成字段：结果带 `state`（
 
 - 不做看板式的任务对象：活仍然是消息，派活树的结构不变。
 - 不新增顶层实体，也不给活加 id 之外的标识。
-- 不做界面聚合面板：聚合数据由插件的 `needsYou()` 提供（开着的提问卡 + 报过 blocked/failed 的活），等客户端接。
+- 不做看板式面板：聚合数据由插件的 `needsYou()` / `workStats()` / `workHealth()` / `workHistory()` 提供，界面只在侧栏区块里用。
 - 不把状态写进系统提示（缓存要稳定）。
 - 不让插件自己把用户的回答转发给做活的 Bot：那要伪造一条请求，还要决定谁是发件人；由派活的 Bot 转达，一步模型调用换取它可以改写措辞、补充上下文。
 
@@ -97,8 +124,12 @@ dsh-superagent 的做法是把这两件事都变成字段：结果带 `state`（
 - `person/review` 只在「报了 ready、回合还没结束」的窗口里出现，通常极短。
 - 报告是 Bot 的判断，不是证据；`ready` 依然不等于「已验收」。
 - 提问卡的答案要经过派活的 Bot 转发一次，那一步是模型调用；它漏转，答案就到不了做活的 Bot。
-- 停滞标记只在查询时可见。派活的 Bot 不会因此被唤醒，用户不打开界面就不会知道。
+- 停滞只通知派活的 Bot 一次（下一次回合读到），它不打开对话就不会因此开口。
+- 重派只重派一次（以活为名），第二次停滞只通知不重派。
+- 观察模式记录的是「本来会发的请求」，不含 `request_id` 语义的重放；重复的同一条请求只记一次。
+- 度量只记关掉的活；开着的活只出现在 `workStats().open`。
 
 ## 变更
 
 - 2026-11-02：定下。
+- 2026-11-02：补上协议层剩余项——租约到期动作（通知上游 / 可选幂等重派）、观察模式（`proactive`，`proposed` 活进收件箱）、度量（`workLog` + `rt.workStats()`）、收件箱批量处理（`key` + `needs-dismiss`）、面板的健康与历史两问（`rt.workHealth()` / `rt.workHistory()`）。
