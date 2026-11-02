@@ -213,9 +213,69 @@ export function install(rt) {
     return disposers
   }
 
+  // Every background job a Bot started, in whichever Session it runs. Waiting for a job
+  // that is itself still running — and, past its expected span, still writing — is
+  // progress, and the stall sweep asks here before it calls a work stale.
+  const liveJobs = new Map()
+  function noteJob(event, sessionId) {
+    const jobId = event.data?.jobId
+    if (typeof jobId !== 'string' || jobId === '') return
+    if (event.type === 'job/registered') {
+      const startedAt = Number.isFinite(event.data.startedAt) ? event.data.startedAt : Date.now()
+      liveJobs.set(jobId, {
+        id: jobId,
+        sessionId,
+        startedAt,
+        lastActivityAt: startedAt,
+        ...(typeof event.data.kind === 'string' ? { kind: event.data.kind } : {}),
+        ...(typeof event.data.label === 'string' ? { label: event.data.label } : {}),
+        outputTotal: undefined,
+      })
+      return
+    }
+    liveJobs.delete(jobId)
+  }
+
+  // Reads what each live job has written since the last look: growth is activity, and a
+  // job the registry no longer lists is gone even if its settlement was missed.
+  function sampleJobs(at = Date.now()) {
+    for (const [id, job] of liveJobs) {
+      let view
+      try {
+        view = jobs?.get?.(id, job.sessionId)
+      } catch {
+        view = undefined
+      }
+      if (view === undefined) {
+        if (jobs !== undefined) liveJobs.delete(id)
+        continue
+      }
+      const total = Number(view.output?.total)
+      if (Number.isFinite(total)) {
+        if (job.outputTotal === undefined) {
+          job.outputTotal = total
+          if (total > 0) job.lastActivityAt = at
+        } else if (total > job.outputTotal) {
+          job.outputTotal = total
+          job.lastActivityAt = at
+        }
+      }
+      if (view.progress !== undefined) job.lastActivityAt = at
+      if (view.status !== 'running' && view.status !== 'stopping') liveJobs.delete(id)
+    }
+    return liveJobs
+  }
+
+  // The live jobs of one Bot, wherever it is working.
+  const liveJobsOf = botId => (botId === undefined ? [] : [...liveJobs.values()].filter(job => rt.selfOf?.(job.sessionId) === botId))
+
   ctx.on('session/event', (session, event) => {
     const id = session?.id
-    if (id === undefined || !privateOf(id)) return
+    if (id === undefined) return
+    // Job lifecycle is tracked for every Session a Bot works in, its own chat or a
+    // group's; the steer handling below only applies to its own chat.
+    if (event.type === 'job/registered' || event.type === 'job/settled') noteJob(event, id)
+    if (!privateOf(id)) return
     const track = stateOf(id)
     switch (event.type) {
       case 'step/start': {
@@ -262,4 +322,6 @@ export function install(rt) {
         break
     }
   })
+  rt.sampleJobs = sampleJobs
+  rt.liveJobsOf = liveJobsOf
 }

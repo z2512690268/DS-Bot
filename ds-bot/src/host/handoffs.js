@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import { MESSAGE_INLINE_MAX, TEXT_KEPT, WORK_LOG_MAX } from './constants.js'
 import { headOf } from './text.js'
-import { leasePolicyOf, normalizeReport, proactiveOf, reportLine, stalledReport, waitsForUser, workStateOf } from './work-state.js'
+import { jobInProgress, leasePolicyOf, normalizeReport, proactiveOf, reportLine, stalledReport, waitsForUser, workStateOf } from './work-state.js'
 
 const minutes = since => {
   const count = Math.floor((Date.now() - since) / 60_000)
@@ -907,6 +907,9 @@ export function install(rt) {
   // mark stays until the owner reports again, so a sweep that runs every minute cannot
   // send the same notice twice.
   const sweepStalled = (at = Date.now()) => {
+    // Read what the live background jobs wrote since the last sweep: a Bot waiting on
+    // one that is still writing is making progress, not stalling.
+    rt.sampleJobs?.(at)
     let changed = false
     for (const [id, work] of Object.entries(works())) {
       // A stall the user already dismissed needs no place in the team file: its row is
@@ -923,6 +926,17 @@ export function install(rt) {
       if (work.stalled !== undefined) continue
       const report = stalledReport(work, at, leasePolicy.deadline)
       if (report === undefined) continue
+      // Waiting for a background job of the Bot that holds the work is progress while
+      // the job is expected to run, or past that while it still writes something. A job
+      // that has gone silent past twice its expected span stops excusing the silence,
+      // and the report the asker reads says so.
+      const jobs = rt.liveJobsOf?.(work.to) ?? []
+      if (jobs.some(job => jobInProgress(job, at))) continue
+      const silentJob = jobs.find(job => !jobInProgress(job, at))
+      if (silentJob !== undefined) {
+        const since = silentJob.lastActivityAt ?? silentJob.startedAt ?? at
+        report.summary = `${report.summary}; a background job has produced no output for ${Math.max(1, Math.round((at - since) / 60_000))} min`
+      }
       work.report = report
       work.stalled = { at, action: leasePolicy.action }
       pushHistory(work, { at, event: 'stalled', ...(report.reason === undefined ? {} : { reason: report.reason }) })

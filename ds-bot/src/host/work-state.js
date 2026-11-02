@@ -104,6 +104,24 @@ export function leasePolicyOf(config = {}) {
   }
 }
 
+// A background job is expected to take about half an hour; waiting for one is progress.
+// Past twice that, a job that has written nothing for as long is stuck as far as the
+// team can tell, and the work it holds may be marked stale again.
+export const JOB_EXPECTED_MS = 30 * 60_000
+export const JOB_GRACE_MS = 2 * JOB_EXPECTED_MS
+
+/**
+ * True while a live background job of the Bot that holds the work is itself making
+ * progress: it is young enough to be expected to run, or it wrote something recently.
+ * Older and silent past the grace, it no longer excuses the silence.
+ */
+export function jobInProgress(job, at = Date.now(), grace = JOB_GRACE_MS) {
+  if (job === undefined) return false
+  const since = job.lastActivityAt ?? job.startedAt
+  if (!Number.isFinite(since)) return false
+  return at - since < grace
+}
+
 /**
  * The report a work that stopped reporting gets, or undefined while it is young
  * enough or has already reported an outcome. `reason` names the fact for the Bot that
