@@ -194,7 +194,7 @@ test('a report with nothing for the user opens no question card', async (t) => {
 test('work that stopped reporting is marked stalled, and a fresh one is not', () => {
   const at = Date.now()
   assert.deepEqual(stalledReport({ at: at - STALL_MS - 60_000 }, at),
-    { state: 'blocked', summary: 'no progress for 31 min', at, stalled: true })
+    { state: 'blocked', summary: 'no progress for 31 min', at, stalled: true, reason: 'no_progress' })
   assert.equal(stalledReport({ at }, at), undefined)
   assert.equal(stalledReport({ at: at - STALL_MS - 60_000, report: { state: 'ready', at } }, at), undefined)
   assert.equal(stalledReport({ at: 0, progress: { state: 'progress', at: at - 1000 } }, at), undefined)

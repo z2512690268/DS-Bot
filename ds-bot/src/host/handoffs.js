@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import { TEXT_KEPT } from './constants.js'
 import { headOf } from './text.js'
-import { normalizeReport, reportLine, stalledReport, waitsForUser, workStateOf } from './work-state.js'
+import { leasePolicyOf, normalizeReport, reportLine, stalledReport, waitsForUser, workStateOf } from './work-state.js'
 
 const minutes = since => {
   const count = Math.floor((Date.now() - since) / 60_000)
@@ -24,6 +24,8 @@ export function install(rt) {
   const whole = new Map()
   const save = () => void rt.save().catch(() => {})
   const nameOf = id => rt.botOf(id)?.name
+  // What the team does when a lease runs out: a constant, or the plugin config.
+  const leasePolicy = leasePolicyOf(rt.config)
 
   // The whole result of a work, in a file of its own: state.json is written whole on
   // every save, so it keeps only the start of a long result, and a restart would cut
@@ -389,10 +391,15 @@ export function install(rt) {
     if (work === undefined) return { error: 'This turn is not answering a request, so there is no work to report on.' }
     const { report, error } = normalizeReport(input)
     if (error !== undefined) return { error }
-    if (report.state === 'progress') work.progress = report
-    else work.report = report
-    // A report is the owner saying it is still there: the lease moves with it.
+    if (report.state === 'progress') {
+      work.progress = report
+      // The stalled mark is the host's guess; the owner reporting progress replaces it.
+      if (work.report?.stalled === true) delete work.report
+    } else work.report = report
+    // A report is the owner saying it is still there: the lease moves with it, and a
+    // later silence is a new stall that is worth reporting again.
     work.lease = { at: report.at, by: work.to }
+    delete work.stalled
     save()
     return { report }
   }
@@ -444,16 +451,70 @@ export function install(rt) {
     return items.sort((left, right) => (left.since ?? 0) - (right.since ?? 0))
   }
 
-  // Work that stopped reporting is marked stale, so the Bot that asked reads why it
-  // still waits instead of waiting forever. Marking it costs no model call: the state
-  // shows in statusOf and list_bots, and the answer already carries it when it comes.
+  // How long the work went without a word, the same way the report says it.
+  const silenceOf = (work, report) => {
+    const since = work.progress?.at ?? work.lease?.at ?? work.at ?? report.at
+    return Math.max(1, Math.round((report.at - since) / 60_000))
+  }
+
+  // The Bot that asked hears that the work it waits for stopped reporting. The input
+  // waits in its own chat for its next turn, so it can do the work itself, hand it on,
+  // or tell the user; no model call is spent on a Bot that is not running.
+  async function notifyStall(work, report) {
+    if (work.from === undefined || work.to === undefined || rt.botOf(work.from) === undefined) return
+    const min = silenceOf(work, report)
+    const text = `The work you handed on to ${nameOf(work.to)} did not report for ${min} min, so it is marked stalled. It may still be running. Decide what to do with it: do it yourself, hand it to another Bot, or tell the user. If it answers, its answer still reaches you.`
+    await rt.deliver({ fromId: work.to, toId: work.from, role: 'stalled', text })
+  }
+
+  // The stalled task goes back to the Bot that held it, under the same work. The
+  // request is named by the work, so a sweep that runs again — in this run or after a
+  // restart, with or without the stall mark — finds its receipt and never runs the
+  // task a second time.
+  async function redispatch(id, work, report) {
+    if (work.from === undefined || work.to === undefined || rt.botOf(work.to) === undefined) return
+    const exchange = (state.exchanges ?? []).find(item => item.id === id && item.role === 'request')
+    if (exchange === undefined) return
+    const request = await rt.exchangeText(exchange)
+    if (request === undefined || !request.whole || String(request.text ?? '').trim() === '') return
+    const identity = rt.requestIdentity({
+      caller: work.from,
+      context: 'lease',
+      name: `stall:${id}`,
+      payload: { work: id, text: request.text },
+    })
+    if (await rt.knownRequest(identity) !== undefined) return
+    await rt.admitRequest(identity, () => {
+      const min = silenceOf(work, report)
+      const text = `[${nameOf(work.to)} stopped reporting on this work for ${min} min, so it is handed to you again]\n\n${request.text}`
+      return rt.deliver({ fromId: work.from, toId: work.to, role: 'request', exchangeId: id, text })
+    })
+  }
+
+  const actOnStall = async (id, work, report) => {
+    await notifyStall(work, report)
+    if (leasePolicy.action === 'redispatch') await redispatch(id, work, report)
+  }
+
+  // Work that stopped reporting is marked stale and acted on, so the Bot that asked
+  // reads why it still waits instead of waiting forever. A stall is acted on once: the
+  // mark stays until the owner reports again, so a sweep that runs every minute cannot
+  // send the same notice twice.
   const sweepStalled = (at = Date.now()) => {
     let changed = false
-    for (const work of Object.values(works())) {
-      const report = stalledReport(work, at)
+    for (const [id, work] of Object.entries(works())) {
+      if (work.stalled !== undefined) continue
+      const report = stalledReport(work, at, leasePolicy.deadline)
       if (report === undefined) continue
       work.report = report
+      work.stalled = { at, action: leasePolicy.action }
       changed = true
+      void actOnStall(id, work, report).catch((error) => {
+        // It was not told, so the next sweep tries again rather than swallowing the stall.
+        rt.warn('ds-bot: the stall of work %s was not reported: %s', id, error)
+        delete work.stalled
+        save()
+      })
     }
     if (changed) save()
     return changed
@@ -464,5 +525,5 @@ export function install(rt) {
     return () => clearInterval(timer)
   }, 'ds-bot: mark work that stopped reporting')
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, activeTurns, needsYou, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, activeTurns, needsYou, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
 }

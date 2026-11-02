@@ -27,6 +27,9 @@ export function install(rt) {
     if (resent && role !== 'room') return `[Message from ${fromName} · DeepSeek Harness restarted before it could reach you]`
     if (role === 'reply') return `[Reply from ${fromName}${goesOn}]`
     if (role === 'stopped') return `[Stopped by ${fromName}]`
+    // The lease of a work this Bot waits for ran out: it is news to act on, not a
+    // request, so the turn that reads it owes no answer.
+    if (role === 'stalled') return `[A work you handed on to ${fromName} stalled]`
     if (role === 'room') return `[Group chat "${roomName}" · ${note}]`
     if (role === 'report') return `[Group chat "${roomName}" · replies to your post${goesOn}]`
     if (role === 'kickoff') return '[Bot team setup]'

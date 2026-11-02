@@ -27,7 +27,7 @@ export function workStateOf(work, at = Date.now()) {
   const { report } = work
   if (report !== undefined) {
     const since = report.at ?? work.at
-    if (report.state === 'blocked') return { state: 'person/blocked', since, summary: report.summary, humanAction: report.humanAction }
+    if (report.state === 'blocked') return { state: 'person/blocked', since, summary: report.summary, humanAction: report.humanAction, ...(report.reason === undefined ? {} : { reason: report.reason }) }
     if (report.state === 'failed') return { state: 'person/failed', since, summary: report.summary, humanAction: report.humanAction }
     if (report.state === 'ready') return { state: 'person/review', since, summary: report.summary }
   }
@@ -76,11 +76,26 @@ export function normalizeReport(input = {}, at = Date.now()) {
 /** How long a work may go without a report before the code marks it stale. */
 export const STALL_MS = 30 * 60_000
 
+// How long a work may wait for that report, defaulted here instead of at each call.
+// `notify`: the Bot that asked reads that it stalled at its next turn. `redispatch`:
+// the same task also goes back to the Bot that held it, once per stall.
+export const LEASE_ACTIONS = ['notify', 'redispatch']
+export const LEASE_POLICY = { action: 'notify', deadline: STALL_MS }
+
+/** The lease policy this team runs: the constants above, overridden by plugin config. */
+export function leasePolicyOf(config = {}) {
+  const minutes = Number(config.workDeadlineMinutes)
+  return {
+    action: LEASE_ACTIONS.includes(config.leaseAction) ? config.leaseAction : LEASE_POLICY.action,
+    deadline: Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : LEASE_POLICY.deadline,
+  }
+}
+
 /**
  * The report a work that stopped reporting gets, or undefined while it is young
- * enough or has already reported an outcome. Marking it is the only thing the host
- * does: it does not wake the Bot that asked, which would cost a model call for news
- * the panel and `list_bots` already carry.
+ * enough or has already reported an outcome. `reason` names the fact for the Bot that
+ * asked: the lease ran out without a word, which is not the same as the owner saying
+ * it is blocked.
  */
 export function stalledReport(work, at = Date.now(), deadline = STALL_MS) {
   if (work === undefined) return undefined
@@ -88,5 +103,5 @@ export function stalledReport(work, at = Date.now(), deadline = STALL_MS) {
   const since = work.progress?.at ?? work.lease?.at ?? work.at ?? at
   if (at - since < deadline) return undefined
   const min = Math.max(1, Math.round((at - since) / 60_000))
-  return { state: 'blocked', summary: `no progress for ${min} min`, at, stalled: true }
+  return { state: 'blocked', summary: `no progress for ${min} min`, at, stalled: true, reason: 'no_progress' }
 }
