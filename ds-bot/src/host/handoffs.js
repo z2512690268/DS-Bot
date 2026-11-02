@@ -8,7 +8,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { TEXT_KEPT } from './constants.js'
+import { TEXT_KEPT, WORK_LOG_MAX } from './constants.js'
 import { headOf } from './text.js'
 import { leasePolicyOf, normalizeReport, proactiveOf, reportLine, stalledReport, waitsForUser, workStateOf } from './work-state.js'
 
@@ -28,6 +28,31 @@ export function install(rt) {
   const leasePolicy = leasePolicyOf(rt.config)
   // How much work a Bot may start on its own, likewise.
   const proactive = proactiveOf(rt.config)
+
+  // What closed work leaves behind: the numbers a later question about it needs. The
+  // work itself leaves `works` when it is answered, so these stay in a short log.
+  const workLog = () => (state.workLog ??= [])
+  function recordClosed(id, work, fallback) {
+    const closedAt = Date.now()
+    workLog().push({
+      id,
+      final: work.report?.state ?? fallback,
+      authority: work.authority ?? 'delegated',
+      turns: work.turns ?? 0,
+      results: (work.results ?? []).length,
+      ...(work.at === undefined ? {} : { at: work.at, ms: Math.max(0, closedAt - work.at) }),
+      closedAt,
+      ...(work.report?.summary === undefined ? {} : { summary: work.report.summary }),
+    })
+    if (workLog().length > WORK_LOG_MAX) workLog().splice(0, workLog().length - WORK_LOG_MAX)
+  }
+  // A turn that answers the work is one round of it. Not saved on its own: the turn
+  // that runs it saves the work anyway, and a lost count is not worth a second write.
+  function noteWorkTurn(id) {
+    const work = works()[id]
+    if (work === undefined) return
+    work.turns = (work.turns ?? 0) + 1
+  }
 
   // The whole result of a work, in a file of its own: state.json is written whole on
   // every save, so it keeps only the start of a long result, and a restart would cut
@@ -225,6 +250,7 @@ export function install(rt) {
     rt.warn('ds-bot: closing work %s for %s: report %s, action %s, card target %s',
       id, name, work.report?.state ?? 'none', work.report?.humanAction === undefined ? 'none' : 'yes', work.from ?? 'none')
     askAttention(work, name, id)
+    recordClosed(id, work, 'ready')
     delete works()[id]
     // What it still waits for comes back to it alone.
     for (const child of Object.values(works())) if (child.parent === id) delete child.parent
@@ -283,6 +309,7 @@ export function install(rt) {
     const work = works()[id]
     if (work === undefined) return
     const { parent } = work
+    recordClosed(id, work, 'dropped')
     delete works()[id]
     const above = works()[parent]
     if (above !== undefined) above.open = above.open.filter(other => other !== id)
@@ -477,6 +504,31 @@ export function install(rt) {
   // more parallel work than it can carry: a user's message always gets through.
   const activeTurns = () => [...rt.live.values()].filter(entry => entry?.turn !== undefined).length
 
+  // How the team's work has gone so far, read from the log of closed works and the
+  // open ones. Read-only: a panel may ask as often as it polls.
+  function workStats() {
+    const closed = state.workLog ?? []
+    const byFinal = {}
+    let ms = 0
+    let timed = 0
+    let turns = 0
+    for (const entry of closed) {
+      byFinal[entry.final] = (byFinal[entry.final] ?? 0) + 1
+      turns += entry.turns ?? 0
+      if (entry.ms !== undefined) {
+        ms += entry.ms
+        timed += 1
+      }
+    }
+    return {
+      closed: closed.length,
+      open: Object.keys(works()).length,
+      byFinal,
+      turns,
+      ...(timed === 0 ? {} : { avgMs: Math.round(ms / timed) }),
+    }
+  }
+
   // Everything that waits for the user, in one list: the question cards the team has
   // open, and the work that came back blocked or failed. It is what a panel or a
   // summary needs to answer "does anything need me now".
@@ -595,5 +647,5 @@ export function install(rt) {
     return () => clearInterval(timer)
   }, 'ds-bot: mark work that stopped reporting')
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, activeTurns, needsYou, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, noteWorkTurn, workStats, activeTurns, needsYou, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
 }

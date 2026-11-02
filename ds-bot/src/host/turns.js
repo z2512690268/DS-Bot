@@ -366,6 +366,8 @@ export function install(rt) {
   // package that only opens a part is acknowledged with a fixed line, also hidden.
   const claimTrigger = (sessionId, entry, info) => {
     entry.info = info
+    // A turn that answers a work is one round of it, counted where the work is kept.
+    rt.noteWorkTurn?.(rt.workOf?.(info))
     // A turn that was stopped for a part switch brings its joined requests along.
     if (Array.isArray(info.joined) && info.joined.length > 0) {
       entry.joined = info.joined.filter(item => item?.info !== undefined && item.info !== null)

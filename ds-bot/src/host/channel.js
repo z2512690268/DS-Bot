@@ -69,6 +69,9 @@ export function install(rt) {
     // Everything waiting for the user in one list (handoffs.js needsYou): open
     // question cards and work that came back blocked, failed or ready to review.
     needsYou: rt.needsYou?.() ?? [],
+    // How the team's work has gone: closed and open counts, the final states, the
+    // rounds run and the average time a work took. Read-only and cheap to poll.
+    workStats: rt.workStats?.() ?? null,
     // Key names and who may use them; values never leave the host.
     secrets: rt.secretsView(),
     capabilities: rt.capabilityLibraryView(),
