@@ -587,18 +587,14 @@ export function TeamSidebar(props) {
         void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer))
           .catch(error => actions.reportError?.(error, 'answer-question'))
       },
-      onSend: (sessionId, text) => {
-        void Promise.resolve(actions.send(sessionId, text))
-          .catch(error => actions.reportError?.(error, 'send'))
-      },
+      // The block hides a replied row itself and puts it back when this rejects.
+      onSend: (sessionId, text) => Promise.resolve(actions.send(sessionId, text)),
       onApprove: (id) => {
         void Promise.resolve(actions.approveProposal(id))
           .catch(error => actions.reportError?.(error, 'approve-proposal'))
       },
-      onIgnore: (keys) => {
-        void Promise.resolve(actions.dismissNeeds(keys))
-          .catch(error => actions.reportError?.(error, 'needs-dismiss'))
-      },
+      onIgnore: keys => Promise.resolve(actions.dismissNeeds(keys)),
+      onError: (error, tag = 'needs') => actions.reportError?.(error, tag),
     }) : null,
     h('div', { ref: listRef, className: 'bt-list', role: 'region', 'aria-label': t('Bot list') },
       wideContent ? (main ? h(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : h('div', { className: 'bt-hint' }, uiNow.bootFailed ? bootHint() : t('Setting up your Main Bot…'))) : null,
