@@ -2634,6 +2634,11 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-ignore{color:color-mix(in srgb,var(--bt-ink) 40%,transparent)}
 .bt-needs-scroll{max-height:38vh;overflow-y:auto;overscroll-behavior:contain}
 .bt-needs-row[data-kind="proposed"] .bt-needs-mark{background:var(--bt-accent);opacity:.55}
+.bt-needs-health{font-size:11px;line-height:1.4;padding:4px 6px;border-radius:8px;color:color-mix(in srgb,var(--bt-danger) 78%,var(--bt-ink));background:color-mix(in srgb,var(--bt-danger) 10%,transparent)}
+.bt-needs-history{list-style:none;margin:0;padding:0 6px 4px 18px;display:flex;flex-direction:column;gap:1px;font-size:11px;color:color-mix(in srgb,var(--bt-ink) 62%,transparent)}
+.bt-needs-history li{display:flex;gap:6px;min-width:0}
+.bt-needs-hist-time{font-variant-numeric:tabular-nums;color:color-mix(in srgb,var(--bt-ink) 42%,transparent);white-space:nowrap}
+.bt-needs-hist-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* Chromium ignores ::-webkit-scrollbar when scrollbar-width or scrollbar-color (inherited) is non-auto. */
 .bt-side:not(.bt-rail)>.bt-list{margin-right:-12px;scrollbar-gutter:stable;scrollbar-width:auto;scrollbar-color:auto}
@@ -10039,6 +10044,39 @@ var lineOf = (item) => {
   return item.summary ?? item.detail ?? "";
 };
 var itemKey = (item) => item.key ?? (item.kind === "answer" ? `answer:${item.questionId}` : `${item.kind}:${item.work}`);
+function healthLineOf(health) {
+  if (health === null || health === void 0) return void 0;
+  const parts = [];
+  if (health.deliveryFailures > 0) parts.push(zh() ? `${health.deliveryFailures} 次投递失败` : `${health.deliveryFailures} failed ${health.deliveryFailures === 1 ? "delivery" : "deliveries"}`);
+  if (health.answerFailures > 0) parts.push(zh() ? `${health.answerFailures} 次回答失败` : `${health.answerFailures} failed ${health.answerFailures === 1 ? "answer" : "answers"}`);
+  if (health.stalled > 0) parts.push(zh() ? `${health.stalled} 件停滞` : `${health.stalled} stalled`);
+  return parts.length === 0 ? void 0 : parts.join(" · ");
+}
+var EVENT_NAMES = {
+  created: ["创建", "Created"],
+  proposed: ["提议", "Proposed"],
+  progress: ["进行中", "Progress"],
+  ready: ["可验收", "Ready"],
+  blocked: ["受阻", "Blocked"],
+  failed: ["失败", "Failed"],
+  dropped: ["无需处理", "Dropped"],
+  stalled: ["停滞", "Stalled"],
+  closed: ["结束", "Ended"]
+};
+function historyLines(item) {
+  const history = Array.isArray(item?.history) ? item.history : [];
+  if (history.length === 0) return [];
+  const start = history[0].at ?? 0;
+  return history.map((event) => {
+    const name = EVENT_NAMES[event.event]?.[zh() ? 0 : 1] ?? String(event.event);
+    const meaning = event.summary ?? event.text ?? (event.final === void 0 ? "" : EVENT_NAMES[event.final]?.[zh() ? 0 : 1] ?? event.final);
+    return {
+      at: event.at,
+      time: elapsedLabel((event.at ?? start) - start),
+      text: meaning === "" ? name : `${name}: ${meaning}`
+    };
+  });
+}
 function AnswerBox({ item, onAnswer }) {
   const [text, setText] = (0, import_react21.useState)("");
   const options = Array.isArray(item.options) ? item.options.slice(0, 3) : [];
@@ -10093,10 +10131,13 @@ function AnswerBox({ item, onAnswer }) {
     )
   );
 }
-function NeedsYou({ items, onOpen, onAnswer, onIgnore }) {
+function NeedsYou({ items: all_items, health, onOpen, onAnswer, onIgnore }) {
+  const items = Array.isArray(all_items) ? all_items : [];
   const [open, setOpen] = (0, import_react21.useState)({});
   const [all, setAll] = (0, import_react21.useState)(false);
-  if (!Array.isArray(items) || items.length === 0) return null;
+  const [timeline, setTimeline] = (0, import_react21.useState)({});
+  const trouble = healthLineOf(health);
+  if (items.length === 0 && trouble === void 0) return null;
   const answers = items.filter((item) => item.kind === "answer");
   const works = items.filter((item) => item.kind !== "answer");
   const toggle = (key) => setOpen((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -10126,6 +10167,7 @@ function NeedsYou({ items, onOpen, onAnswer, onIgnore }) {
   return (0, import_react21.createElement)(
     "section",
     { className: "bt-needs", "aria-label": zh() ? "需要你" : "Needs you" },
+    trouble === void 0 ? null : (0, import_react21.createElement)("div", { className: "bt-needs-health", role: "status", title: zh() ? "最近一小时" : "In the last hour" }, trouble),
     (0, import_react21.createElement)(
       "div",
       { className: "bt-needs-head" },
@@ -10139,6 +10181,7 @@ function NeedsYou({ items, onOpen, onAnswer, onIgnore }) {
       items.map((item, index) => {
         const key = itemKey(item);
         const shown = all || open[key] === true;
+        const shownHistory = timeline[key] === true;
         return (0, import_react21.createElement)(
           "li",
           { className: "bt-needs-entry", key },
@@ -10166,15 +10209,36 @@ function NeedsYou({ items, onOpen, onAnswer, onIgnore }) {
               className: "bt-needs-tool bt-needs-open",
               "aria-expanded": shown,
               onClick: () => toggle(key)
-            }, zh() ? "答" : "Answer") : (0, import_react21.createElement)("button", {
-              type: "button",
-              className: "bt-needs-tool bt-needs-ignore",
-              title: zh() ? "忽略这一条" : "Ignore this one",
-              "aria-label": zh() ? "忽略这一条" : "Ignore this one",
-              onClick: () => dismiss([key])
-            }, "×")
+            }, zh() ? "答" : "Answer") : [
+              (0, import_react21.createElement)("button", {
+                key: "history",
+                type: "button",
+                className: "bt-needs-tool bt-needs-hist",
+                "aria-expanded": shownHistory,
+                title: zh() ? "这件活从创建到结束" : "This work, from start to end",
+                onClick: () => setTimeline((prev) => ({ ...prev, [key]: !prev[key] }))
+              }, zh() ? "历史" : "History"),
+              (0, import_react21.createElement)("button", {
+                key: "ignore",
+                type: "button",
+                className: "bt-needs-tool bt-needs-ignore",
+                title: zh() ? "忽略这一条" : "Ignore this one",
+                "aria-label": zh() ? "忽略这一条" : "Ignore this one",
+                onClick: () => dismiss([key])
+              }, "×")
+            ]
           ),
-          item.kind === "answer" && shown ? (0, import_react21.createElement)(AnswerBox, { key: `answers-${index}`, item, onAnswer }) : null
+          item.kind === "answer" && shown ? (0, import_react21.createElement)(AnswerBox, { key: `answers-${index}`, item, onAnswer }) : null,
+          item.kind !== "answer" && shownHistory ? (0, import_react21.createElement)(
+            "ol",
+            { className: "bt-needs-history", "aria-label": zh() ? "这件活的历史" : "History of this work" },
+            historyLines(item).map((line, at) => (0, import_react21.createElement)(
+              "li",
+              { key: at },
+              (0, import_react21.createElement)("span", { className: "bt-needs-hist-time" }, line.time),
+              (0, import_react21.createElement)("span", { className: "bt-needs-hist-text" }, line.text)
+            ))
+          ) : null
         );
       })
     )
@@ -10768,6 +10832,7 @@ function TeamSidebar(props) {
     // What waits for the user, above the team: a healthy team shows nothing here.
     wideContent ? (0, import_react22.createElement)(NeedsYou, {
       items: roster.needsYou ?? [],
+      health: roster.workHealth,
       onOpen: (id) => actions.openSession(id),
       onAnswer: (sessionId, questionId, answer) => {
         void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer)).catch((error) => actions.reportError?.(error, "answer-question"));

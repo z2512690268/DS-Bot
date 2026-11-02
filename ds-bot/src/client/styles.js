@@ -154,6 +154,11 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-ignore{color:color-mix(in srgb,var(--bt-ink) 40%,transparent)}
 .bt-needs-scroll{max-height:38vh;overflow-y:auto;overscroll-behavior:contain}
 .bt-needs-row[data-kind="proposed"] .bt-needs-mark{background:var(--bt-accent);opacity:.55}
+.bt-needs-health{font-size:11px;line-height:1.4;padding:4px 6px;border-radius:8px;color:color-mix(in srgb,var(--bt-danger) 78%,var(--bt-ink));background:color-mix(in srgb,var(--bt-danger) 10%,transparent)}
+.bt-needs-history{list-style:none;margin:0;padding:0 6px 4px 18px;display:flex;flex-direction:column;gap:1px;font-size:11px;color:color-mix(in srgb,var(--bt-ink) 62%,transparent)}
+.bt-needs-history li{display:flex;gap:6px;min-width:0}
+.bt-needs-hist-time{font-variant-numeric:tabular-nums;color:color-mix(in srgb,var(--bt-ink) 42%,transparent);white-space:nowrap}
+.bt-needs-hist-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* Chromium ignores ::-webkit-scrollbar when scrollbar-width or scrollbar-color (inherited) is non-auto. */
 .bt-side:not(.bt-rail)>.bt-list{margin-right:-12px;scrollbar-gutter:stable;scrollbar-width:auto;scrollbar-color:auto}

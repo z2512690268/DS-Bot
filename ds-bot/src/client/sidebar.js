@@ -581,6 +581,7 @@ export function TeamSidebar(props) {
     // What waits for the user, above the team: a healthy team shows nothing here.
     wideContent ? h(NeedsYou, {
       items: roster.needsYou ?? [],
+      health: roster.workHealth,
       onOpen: id => actions.openSession(id),
       onAnswer: (sessionId, questionId, answer) => {
         void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer))

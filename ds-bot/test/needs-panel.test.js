@@ -15,7 +15,7 @@ const { JSDOM } = createRequire(join(process.env.DSH_HARNESS ?? join(PLUGIN, '..
 // read without a renderer. `useState` keeps its first value, which is what a first
 // paint shows.
 const { outputFiles } = await build({
-  stdin: { contents: "export { NeedsYou } from './src/client/need-you.js'", resolveDir: PLUGIN },
+  stdin: { contents: "export { NeedsYou, healthLineOf, historyLines } from './src/client/need-you.js'", resolveDir: PLUGIN },
   bundle: true, format: 'cjs', platform: 'browser', write: false, logLevel: 'silent',
   external: ['react'],
 })
@@ -30,7 +30,7 @@ runInNewContext(outputFiles[0].text, {
   module, exports: module.exports, document: dom.window.document, window: dom.window,
   require: name => (name === 'react' ? react : {}),
 })
-const { NeedsYou } = module.exports
+const { NeedsYou, healthLineOf, historyLines } = module.exports
 
 const flat = (children) => children.flatMap(child => (Array.isArray(child) ? flat(child) : child === undefined || child === null || child === false ? [] : [child]))
 const nodes = node => (node !== null && typeof node === 'object' ? [node, ...flat(node.props?.children ?? []).flatMap(nodes)] : [])
@@ -89,4 +89,38 @@ test('ignoring several works at once sends every work key, never a question', ()
 test('a healthy team shows nothing at all', () => {
   assert.equal(NeedsYou({ items: [], onOpen() {}, onAnswer() {}, onIgnore() {} }), null)
   assert.equal(NeedsYou({ onOpen() {} }), null)
+  assert.equal(healthLineOf({ stalled: 0, deliveryFailures: 0, answerFailures: 0 }), undefined)
+  assert.equal(healthLineOf(null), undefined)
+  assert.equal(healthLineOf({ stalled: 1, deliveryFailures: 0, answerFailures: 0 }), '1 stalled')
+})
+
+test('the health line says what is wrong, and stays quiet about what is well', () => {
+  assert.equal(healthLineOf({ stalled: 0, deliveryFailures: 2, answerFailures: 1 }), '2 failed deliveries · 1 failed answer')
+  assert.equal(healthLineOf({ stalled: 0, deliveryFailures: 1, answerFailures: 0 }), '1 failed delivery')
+  const tree = NeedsYou({ items: [], health: { stalled: 2, deliveryFailures: 0, answerFailures: 0 }, onOpen() {}, onAnswer() {}, onIgnore() {} })
+  assert.ok(tree, 'a stalled team shows the health line even with no rows')
+  assert.match(textOf(tree), /2 stalled/)
+  assert.equal(NeedsYou({ items: [], health: { stalled: 0, deliveryFailures: 0, answerFailures: 0 }, onOpen() {} }), null)
+})
+
+test('one work\'s history reads as a timeline from the moment it was opened', () => {
+  const item = {
+    kind: 'blocked', work: 'w1', summary: 'needs a key',
+    history: [
+      { at: 1_000, event: 'created', authority: 'asked' },
+      { at: 61_000, event: 'progress', summary: 'reading the file' },
+      { at: 184_000, event: 'blocked', summary: 'needs a key' },
+    ],
+  }
+  assert.deepEqual(historyLines(item).map(line => [line.time, line.text]), [
+    ['0s', 'Created'],
+    ['1m 0s', 'Progress: reading the file'],
+    ['3m 3s', 'Blocked: needs a key'],
+  ])
+  assert.equal(historyLines({ kind: 'blocked', work: 'w2' }).length, 0)
+  const { historyLines: closed } = module.exports
+  assert.deepEqual(closed({
+    kind: 'blocked', work: 'w3',
+    history: [{ at: 0, event: 'created' }, { at: 5_000, event: 'closed', final: 'ready' }],
+  }).map(line => line.text), ['Created', 'Ended: Ready'])
 })

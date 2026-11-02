@@ -72,6 +72,9 @@ export function install(rt) {
     // How the team's work has gone: closed and open counts, the final states, the
     // rounds run and the average time a work took. Read-only and cheap to poll.
     workStats: rt.workStats?.() ?? null,
+    // Whether anything is wrong right now: stalled work and recent failed deliveries
+    // and answers. All zero on a healthy team.
+    workHealth: rt.workHealth?.() ?? null,
     // Key names and who may use them; values never leave the host.
     secrets: rt.secretsView(),
     capabilities: rt.capabilityLibraryView(),

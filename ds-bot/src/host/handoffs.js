@@ -43,6 +43,7 @@ export function install(rt) {
       ...(work.at === undefined ? {} : { at: work.at, ms: Math.max(0, closedAt - work.at) }),
       closedAt,
       ...(work.report?.summary === undefined ? {} : { summary: work.report.summary }),
+      history: [...(work.history ?? []), { at: closedAt, event: 'closed', final: work.report?.state ?? fallback }].slice(-HISTORY_MAX),
     })
     if (workLog().length > WORK_LOG_MAX) workLog().splice(0, workLog().length - WORK_LOG_MAX)
   }
@@ -52,6 +53,33 @@ export function install(rt) {
     const work = works()[id]
     if (work === undefined) return
     work.turns = (work.turns ?? 0) + 1
+  }
+
+  // The timeline a work leaves: what happened to it, oldest first, from the moment it
+  // was opened to the moment it was answered. Enough for a panel, not a transcript.
+  const HISTORY_MAX = 20
+  function pushHistory(work, event) {
+    const list = (work.history ??= [])
+    list.push(event)
+    if (list.length > HISTORY_MAX) list.splice(0, list.length - HISTORY_MAX)
+  }
+  function workHistory(id) {
+    const work = works()[id]
+    if (work !== undefined) return work.history ?? []
+    return (state.workLog ?? []).find(entry => entry.id === id)?.history ?? []
+  }
+
+  // A delivery that failed, or an answer that never reached the Bot that asked. Kept
+  // for an hour: the panel answers "is the system healthy now", not "was it ever".
+  const HEALTH_WINDOW_MS = 60 * 60_000
+  const FAULT_KINDS = ['delivery', 'answer']
+  function noteFault(kind) {
+    if (!FAULT_KINDS.includes(kind)) return
+    const faults = (state.workFaults ??= {})
+    const list = (faults[kind] ??= [])
+    list.push(Date.now())
+    if (list.length > 50) list.splice(0, list.length - 50)
+    save()
   }
 
   // The whole result of a work, in a file of its own: state.json is written whole on
@@ -134,7 +162,7 @@ export function install(rt) {
   function openWork(id, { from, to, parent, fromRoom, room, name, child, authority }) {
     const above = parent === undefined ? undefined : works()[parent]
     const at = Date.now()
-    works()[id] = { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(room ? { room } : {}), ...(above ? { parent } : {}), ...(fromRoom ? { fromRoom } : {}), ...(name ? { name } : {}), ...(child ? { child } : {}), authority: authority ?? 'delegated', lease: { at, by: to }, open: [], results: [], at }
+    works()[id] = { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(room ? { room } : {}), ...(above ? { parent } : {}), ...(fromRoom ? { fromRoom } : {}), ...(name ? { name } : {}), ...(child ? { child } : {}), authority: authority ?? 'delegated', lease: { at, by: to }, open: [], results: [], at, history: [{ at, event: 'created', authority: authority ?? 'delegated' }] }
     if (above !== undefined) above.open.push(id)
     save()
   }
@@ -164,6 +192,7 @@ export function install(rt) {
       open: [],
       results: [],
       at,
+      history: [{ at, event: 'proposed', text: kept }],
     }
     save()
     return id
@@ -340,6 +369,7 @@ export function install(rt) {
   // reply. The result kept with the work it was for is marked, so the answer
   // that goes up names it.
   function answerMissed(id) {
+    noteFault('answer')
     for (const work of Object.values(works())) {
       if (!work.open.includes(id)) continue
       const result = (work.results ?? []).find(item => item.id === id)
@@ -493,6 +523,7 @@ export function install(rt) {
     // later silence is a new stall that is worth reporting again.
     work.lease = { at: report.at, by: work.to }
     delete work.stalled
+    pushHistory(work, { at: report.at, event: report.state, ...(report.summary === undefined ? {} : { summary: report.summary }) })
     save()
     return { report }
   }
@@ -533,6 +564,19 @@ export function install(rt) {
   // ignoring a work does not hide the next state the same work comes back in.
   const needKey = item => (item.kind === 'answer' ? `answer:${item.questionId}` : `${item.kind}:${item.work}`)
 
+  // Whether the system is well right now: the work that stopped reporting, and the
+  // deliveries and answers that failed in the last hour. Nothing here when it is well.
+  function workHealth() {
+    const faults = state.workFaults ?? {}
+    const now = Date.now()
+    const recent = kind => (faults[kind] ?? []).filter(at => now - at < HEALTH_WINDOW_MS).length
+    return {
+      stalled: Object.values(works()).filter(work => work.stalled !== undefined || work.report?.stalled === true).length,
+      deliveryFailures: recent('delivery'),
+      answerFailures: recent('answer'),
+    }
+  }
+
   // Everything that waits for the user, in one list: the question cards the team has
   // open, and the work that came back blocked, failed, ready to review or proposed. It
   // is what a panel or a summary needs to answer "does anything need me now".
@@ -572,6 +616,7 @@ export function install(rt) {
         since: workStateValue.since,
         ...(workStateValue.summary === undefined ? {} : { summary: workStateValue.summary }),
         ...(work.proposal !== undefined ? { proposed: true, to: rt.botOf(work.to)?.name } : {}),
+        history: work.history ?? [],
       })
     }
     // What the user ignored stays hidden until that work or question moves on: an item
@@ -670,11 +715,13 @@ export function install(rt) {
       if (report === undefined) continue
       work.report = report
       work.stalled = { at, action: leasePolicy.action }
+      pushHistory(work, { at, event: 'stalled', ...(report.reason === undefined ? {} : { reason: report.reason }) })
       changed = true
       void actOnStall(id, work, report).catch((error) => {
         // It was not told, so the next sweep tries again rather than swallowing the stall.
         rt.warn('ds-bot: the stall of work %s was not reported: %s', id, error)
         delete work.stalled
+        noteFault('delivery')
         save()
       })
     }
@@ -687,5 +734,5 @@ export function install(rt) {
     return () => clearInterval(timer)
   }, 'ds-bot: mark work that stopped reporting')
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, noteWorkTurn, workStats, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, noteWorkTurn, noteFault, workStats, workHistory, workHealth, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
 }

@@ -271,6 +271,7 @@ export function install(rt) {
           // (resume.js), and the resent request still answers up the tree, so the
           // work it opened stays too. Only a target that is gone drops the work.
           if (!joins && rt.botOf(target.id) === undefined) rt.dropWork(exchangeId)
+          rt.noteFault?.('delivery')
           throw error
         }
         const sent = toUser

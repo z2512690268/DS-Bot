@@ -3,9 +3,12 @@
 // every answer field opens at once or one at a time, a work can be ignored, and a
 // second click clears the works the user does not want to act on. An open question
 // shows its answers as buttons plus a field for an answer of the user's own, so it is
-// answered here without opening the chat; any row opens the Bot it belongs to.
+// answered here without opening the chat; any row opens the Bot it belongs to. The same
+// block answers the other two questions: whether the system is well (shown only when it
+// is not) and what happened to one piece of work (its timeline, opened from its row).
 import { createElement as h, useState } from 'react'
 import { language } from './i18n.js'
+import { elapsedLabel } from './text.js'
 
 // Names chosen here, not through t(): the block must read in the interface language
 // even when the host's own dictionary does not hold these lines.
@@ -23,6 +26,45 @@ const lineOf = (item) => {
 }
 
 const itemKey = item => item.key ?? (item.kind === 'answer' ? `answer:${item.questionId}` : `${item.kind}:${item.work}`)
+
+// The health question, in one line: what is wrong right now, and nothing when the team
+// is well. A count of zero is the quiet case, so it is left out.
+export function healthLineOf(health) {
+  if (health === null || health === undefined) return undefined
+  const parts = []
+  if (health.deliveryFailures > 0) parts.push(zh() ? `${health.deliveryFailures} 次投递失败` : `${health.deliveryFailures} failed ${health.deliveryFailures === 1 ? 'delivery' : 'deliveries'}`)
+  if (health.answerFailures > 0) parts.push(zh() ? `${health.answerFailures} 次回答失败` : `${health.answerFailures} failed ${health.answerFailures === 1 ? 'answer' : 'answers'}`)
+  if (health.stalled > 0) parts.push(zh() ? `${health.stalled} 件停滞` : `${health.stalled} stalled`)
+  return parts.length === 0 ? undefined : parts.join(' · ')
+}
+
+// The history question, as the lines of one work's timeline: the time is counted from
+// the moment it was opened, so a row reads "2m 10s blocked: needs a key".
+const EVENT_NAMES = {
+  created: ['创建', 'Created'],
+  proposed: ['提议', 'Proposed'],
+  progress: ['进行中', 'Progress'],
+  ready: ['可验收', 'Ready'],
+  blocked: ['受阻', 'Blocked'],
+  failed: ['失败', 'Failed'],
+  dropped: ['无需处理', 'Dropped'],
+  stalled: ['停滞', 'Stalled'],
+  closed: ['结束', 'Ended'],
+}
+export function historyLines(item) {
+  const history = Array.isArray(item?.history) ? item.history : []
+  if (history.length === 0) return []
+  const start = history[0].at ?? 0
+  return history.map((event) => {
+    const name = EVENT_NAMES[event.event]?.[zh() ? 0 : 1] ?? String(event.event)
+    const meaning = event.summary ?? event.text ?? (event.final === undefined ? '' : (EVENT_NAMES[event.final]?.[zh() ? 0 : 1] ?? event.final))
+    return {
+      at: event.at,
+      time: elapsedLabel((event.at ?? start) - start),
+      text: meaning === '' ? name : `${name}: ${meaning}`,
+    }
+  })
+}
 
 // The answers of one question: the choices it offers, and always a field of the user's
 // own, because a card whose options do not cover the answer still has to be answerable.
@@ -69,10 +111,13 @@ function AnswerBox({ item, onAnswer }) {
       }, zh() ? '发送' : 'Send')))
 }
 
-export function NeedsYou({ items, onOpen, onAnswer, onIgnore }) {
+export function NeedsYou({ items: all_items, health, onOpen, onAnswer, onIgnore }) {
+  const items = Array.isArray(all_items) ? all_items : []
   const [open, setOpen] = useState({}) // per item: is its answer field shown
   const [all, setAll] = useState(false) // every answer field at once
-  if (!Array.isArray(items) || items.length === 0) return null
+  const [timeline, setTimeline] = useState({}) // per work: is its history shown
+  const trouble = healthLineOf(health)
+  if (items.length === 0 && trouble === undefined) return null
   const answers = items.filter(item => item.kind === 'answer')
   const works = items.filter(item => item.kind !== 'answer')
   const toggle = key => setOpen(prev => ({ ...prev, [key]: !prev[key] }))
@@ -100,6 +145,7 @@ export function NeedsYou({ items, onOpen, onAnswer, onIgnore }) {
     }, zh() ? `全部忽略 ${works.length}` : `Ignore ${works.length}`))
   }
   return h('section', { className: 'bt-needs', 'aria-label': zh() ? '需要你' : 'Needs you' },
+    trouble === undefined ? null : h('div', { className: 'bt-needs-health', role: 'status', title: zh() ? '最近一小时' : 'In the last hour' }, trouble),
     h('div', { className: 'bt-needs-head' },
       h('span', { className: 'bt-needs-title' }, zh() ? '需要你' : 'Needs you'),
       h('span', { className: 'bt-needs-count' }, String(items.length)),
@@ -108,6 +154,7 @@ export function NeedsYou({ items, onOpen, onAnswer, onIgnore }) {
       items.map((item, index) => {
         const key = itemKey(item)
         const shown = all || open[key] === true
+        const shownHistory = timeline[key] === true
         return h('li', { className: 'bt-needs-entry', key },
           h('div', { className: 'bt-needs-line' },
             h('button', {
@@ -126,13 +173,28 @@ export function NeedsYou({ items, onOpen, onAnswer, onIgnore }) {
               className: 'bt-needs-tool bt-needs-open',
               'aria-expanded': shown,
               onClick: () => toggle(key),
-            }, zh() ? '答' : 'Answer') : h('button', {
-              type: 'button',
-              className: 'bt-needs-tool bt-needs-ignore',
-              title: zh() ? '忽略这一条' : 'Ignore this one',
-              'aria-label': zh() ? '忽略这一条' : 'Ignore this one',
-              onClick: () => dismiss([key]),
-            }, '×')),
-          item.kind === 'answer' && shown ? h(AnswerBox, { key: `answers-${index}`, item, onAnswer }) : null)
+            }, zh() ? '答' : 'Answer') : [
+              h('button', {
+                key: 'history',
+                type: 'button',
+                className: 'bt-needs-tool bt-needs-hist',
+                'aria-expanded': shownHistory,
+                title: zh() ? '这件活从创建到结束' : 'This work, from start to end',
+                onClick: () => setTimeline(prev => ({ ...prev, [key]: !prev[key] })),
+              }, zh() ? '历史' : 'History'),
+              h('button', {
+                key: 'ignore',
+                type: 'button',
+                className: 'bt-needs-tool bt-needs-ignore',
+                title: zh() ? '忽略这一条' : 'Ignore this one',
+                'aria-label': zh() ? '忽略这一条' : 'Ignore this one',
+                onClick: () => dismiss([key]),
+              }, '×'),
+            ]),
+          item.kind === 'answer' && shown ? h(AnswerBox, { key: `answers-${index}`, item, onAnswer }) : null,
+          item.kind !== 'answer' && shownHistory ? h('ol', { className: 'bt-needs-history', 'aria-label': zh() ? '这件活的历史' : 'History of this work' },
+            historyLines(item).map((line, at) => h('li', { key: at },
+              h('span', { className: 'bt-needs-hist-time' }, line.time),
+              h('span', { className: 'bt-needs-hist-text' }, line.text)))) : null)
       })))
 }
