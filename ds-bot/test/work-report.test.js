@@ -155,7 +155,9 @@ test('a report that needs the user puts the question where the work was asked fo
   assert.equal(card.detail, 'Writer: needs a key')
   assert.deepEqual(card.options, [{ label: '主钥匙' }, { label: '备用钥匙' }])
   assert.equal(card.allowCustom, true)
-  assert.deepEqual(card.attention, { ownerId: 'b', askerId: 'a' })
+  assert.equal(card.attention.ownerId, 'b')
+  assert.equal(card.attention.askerId, 'a')
+  assert.ok(typeof card.attention.work === 'string' && card.attention.work !== '')
 })
 
 test('the answer to one of those cards goes straight to the Bot that could not go on', async (t) => {
@@ -170,11 +172,15 @@ test('the answer to one of those cards goes straight to the Bot that could not g
   assert.equal(state.questions[chat], undefined)
   // A new request from the Bot that asked to the Bot that could not go on, so the
   // answer arrives as work instead of as a reply with nobody waiting for it.
-  const opened = Object.values(state.works).filter(work => work.from === 'a' && work.to === 'b')
+  const opened = Object.entries(state.works).filter(([, work]) => work.from === 'a' && work.to === 'b')
   assert.equal(opened.length, 1)
+  // The work goes on rather than starting over: the answer reopens the work the
+  // report was made for, so the Bot that asked still waits for the same one.
+  assert.equal(opened[0][0], card.attention.work)
   const woken = agents.get(rt.chatOf('b')).calls
   assert.equal(woken.length, 1)
   assert.match(JSON.stringify(woken[0][1]), /备用钥匙/)
+  assert.match(JSON.stringify(woken[0][1]), /Go on with the work/)
 })
 
 test('a report with nothing for the user opens no question card', async (t) => {

@@ -126,7 +126,9 @@ test('a report from a claimed turn opens the card in the asker chat', async (t) 
   assert.ok(card, `no card; questions: ${JSON.stringify(Object.keys(rt.state.questions))}; works: ${JSON.stringify(Object.keys(rt.state.works))}`)
   assert.equal(card.question, '可以先打开 report-check.txt 吗？')
   assert.deepEqual(card.options.map(option => option.label), ['可以', '等会儿'])
-  assert.deepEqual(card.attention, { ownerId: 'b', askerId: 'a' })
+  assert.equal(card.attention.ownerId, 'b')
+  assert.equal(card.attention.askerId, 'a')
+  assert.ok(typeof card.attention.work === 'string' && card.attention.work !== '')
 })
 
 // A card that a report opened belongs to the user: the reply that comes with the
@@ -145,7 +147,9 @@ test('the reply that comes with a report does not clear the card it opened', asy
   assert.equal(card.question, '可以先打开 report-check.txt 吗？')
   assert.deepEqual(card.options.map(option => option.label), ['可以', '等会儿'])
   assert.equal(card.detail, 'Writer: 验证需要你打开一个文件')
-  assert.deepEqual(card.attention, { ownerId: 'b', askerId: 'a' })
+  assert.equal(card.attention.ownerId, 'b')
+  assert.equal(card.attention.askerId, 'a')
+  assert.ok(typeof card.attention.work === 'string' && card.attention.work !== '')
   // The answer from the Bot that could not go on arrives as a reply in this chat.
   emit('a', 'user/message', { content: textBlock('（回答）'), source: { kind: REPLY_KIND } })
   assert.equal(rt.state.questions[chat], card)

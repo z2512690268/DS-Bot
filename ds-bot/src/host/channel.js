@@ -433,19 +433,20 @@ export function install(rt) {
           if (reply === undefined) return fail('Nothing to send', 'bot/invalid')
           // Claim the question before queueing so a second answer is refused.
           delete state.questions[sessionId]
-          // A card a report opened answers the Bot that could not go on: the answer
-          // goes to it as a new request, so the Bot that asked needs no turn to relay.
+          // A card a report opened answers the Bot that could not go on, on the same
+          // work it reported on: the work goes on rather than starting over, and the
+          // Bot that asked needs no turn to relay the answer.
           const attention = question.attention
           if (attention?.ownerId !== undefined && attention?.askerId !== undefined && rt.botOf(attention.ownerId) !== undefined) {
             const given = JSON.parse(reply.text).answers?.[0] ?? {}
             const said = [...(given.selected ?? []), given.custom ?? ''].filter(Boolean).join(' / ')
-            const exchangeId = randomUUID()
+            const exchangeId = typeof attention.work === 'string' ? attention.work : randomUUID()
             try {
               rt.openWork(exchangeId, { from: attention.askerId, to: attention.ownerId })
               await rt.deliver({
                 fromId: attention.askerId,
                 toId: attention.ownerId,
-                text: `The user answered your question "${question.question}": ${said}`,
+                text: `The user answered your question "${question.question}": ${said}. Go on with the work and report again when it is done.`,
                 role: 'request',
                 exchangeId,
               })

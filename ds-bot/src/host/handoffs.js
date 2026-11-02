@@ -115,7 +115,7 @@ export function install(rt) {
   // instead of reading it as one more line of the answer. A card the Bot asked itself
   // wins: the user is answering something else right now. A card another report opened
   // is replaced, since the user has not seen it yet.
-  function askAttention(work, name) {
+  function askAttention(work, name, id) {
     const report = work.report
     if (report?.humanAction === undefined || report.state === 'dropped' || report.state === 'ready') {
       rt.warn('ds-bot: no card for work %s: report %s has no user action', work.to, report?.state ?? 'missing')
@@ -139,9 +139,10 @@ export function install(rt) {
       options: (report.humanOptions ?? []).map(label => ({ label })),
       allowCustom: true,
       askedAt: Date.now(),
-      // The answer goes straight back to the Bot that could not go on, as a new
-      // request: the Bot that asked need not spend a turn to relay it.
-      attention: { ownerId: work.to, askerId: work.from },
+      // The answer goes straight back to the Bot that could not go on, on the work it
+      // reported on: the Bot that asked need not spend a turn to relay it, and the work
+      // goes on rather than starting over as a new one.
+      attention: { ownerId: work.to, askerId: work.from, work: id },
     }
   }
 
@@ -153,7 +154,7 @@ export function install(rt) {
       rt.warn('ds-bot: %s answered work %s, which was not open any more', name, id)
       return undefined
     }
-    askAttention(work, name)
+    askAttention(work, name, id)
     delete works()[id]
     // What it still waits for comes back to it alone.
     for (const child of Object.values(works())) if (child.parent === id) delete child.parent
