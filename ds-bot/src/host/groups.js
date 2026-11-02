@@ -465,7 +465,7 @@ export function install(rt) {
   // called it, which answers what the turn posts after the round moved on. What the
   // member writes before its last step is posted at once and collected in `said`, and
   // `heard` takes each such line once it is posted.
-  async function roomTurn(room, member, sessionId, { text, files }, note, signal, round, by, said = [], heard = () => {}, onWork = () => {}) {
+  async function roomTurn(room, member, sessionId, { text, files }, note, signal, round, by, namedByUser, said = [], heard = () => {}, onWork = () => {}) {
     if (signal.aborted) return null
     const startedAt = Date.now()
     const exchangeId = randomUUID()
@@ -506,7 +506,7 @@ export function install(rt) {
       signal.addEventListener('abort', () => finish(null), { once: true })
     })
     try {
-      await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text, files, steer: busy, ...(by ? { askedBy: by } : {}) })
+      await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text, files, steer: busy, ...(by ? { askedBy: by } : {}), ...(namedByUser ? { namedByUser: true } : {}) })
       // The prompt reached the member: its read position moves on.
       room.seen[member.id] = seenAt
       // Still held by an earlier request: this turn cannot start until the user answers.
@@ -792,7 +792,7 @@ export function install(rt) {
       markBatchWorked(room.id, member.id)
     }
     const reply = await roomTurn(
-      room, member, session.id, { text, files: prompt.files }, slot.note ?? 'your turn', signal, round, slot.by, said,
+      room, member, session.id, { text, files: prompt.files }, slot.note ?? 'your turn', signal, round, slot.by, slot.namedByUser === true, said,
       line => callFrom(room, round, member, line, called, { worked, byBot: slot.by !== undefined }),
       onWork,
     )
@@ -927,6 +927,9 @@ export function install(rt) {
       // whole message; the text may be only its opening.
       const everyone = room.members.map(rt.botOf).filter(Boolean)
       const named = opener.botId === undefined ? [] : (mentionsOf(opener, everyone) ?? mentionsIn(opener.text ?? '', everyone)).found
+      // The members the user named in the message that opened the round: they were
+      // asked, unlike the members that only answer the round in turn.
+      const userNamed = opener.botId === undefined ? (mentionsOf(opener, everyone) ?? mentionsIn(opener.text ?? '', everyone)).found : []
       const { speakers, ordered } = openingCall(room, opener)
       const calledByOpener = speakers.filter(member => named.includes(member))
       const openingBatchKey = opener.botId !== undefined && calledByOpener.length > 0 ? registerBatch(room.id, opener.botId, calledByOpener) : undefined
@@ -958,7 +961,7 @@ export function install(rt) {
           ...(opener.goal === 'draft' || (draftPost !== undefined && admin !== undefined && member.id === admin.id) ? { note: 'the user wants to set a goal for this group' } : {}),
           ...(opener.goal === 'nudge' ? { note: 'goal check' } : {}),
           ...(opener.goal === 'resume' ? { note: 'the user resumed the goal' } : {}),
-          ...(named.includes(member) ? { by: opener.botId, ...(openingBatchKey ? { batchKey: openingBatchKey } : {}) } : {}),
+          ...(named.includes(member) || userNamed.includes(member) ? { by: opener.botId, ...(opener.botId === undefined ? { namedByUser: true } : {}), ...(named.includes(member) && openingBatchKey ? { batchKey: openingBatchKey } : {}) } : {}),
           ...(opener.done ? { note: `${opener.name ?? 'a member'} finished the work you asked for` } : {}),
         })),
         batches: 1,

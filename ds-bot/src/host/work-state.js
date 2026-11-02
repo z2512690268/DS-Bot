@@ -24,6 +24,11 @@ export function workStateOf(work, at = Date.now()) {
   if (attention !== undefined && attention.answeredAt === undefined) {
     return { state: 'person/answer', since: attention.at ?? work.at, question: attention.question }
   }
+  // Work a Bot started on its own, recorded instead of done: only the user can turn it
+  // into work, so it waits next to the questions rather than under the running work.
+  if (work.proposal !== undefined) {
+    return { state: 'person/proposed', since: work.proposal.at ?? work.at, proposed: true, summary: work.proposal.text }
+  }
   const { report } = work
   if (report !== undefined) {
     const since = report.at ?? work.at
@@ -36,6 +41,14 @@ export function workStateOf(work, at = Date.now()) {
 
 /** True when the state is one only the user can end: a question, a blocker, a result to review. */
 export const waitsForUser = state => state.startsWith('person/')
+
+// How much work a Bot may start on its own: `off` (only what was asked for),
+// `observe` (record what it would have done, and do nothing), `auto` (do it).
+export const PROACTIVE_MODES = ['off', 'observe', 'auto']
+export const PROACTIVE_MODE = 'observe'
+
+/** The team's proactive mode: the constant above, overridden by plugin config. */
+export const proactiveOf = (config = {}) => (PROACTIVE_MODES.includes(config.proactive) ? config.proactive : PROACTIVE_MODE)
 
 /**
  * The line a report adds above the answer that goes up the tree. Empty when the work
@@ -99,6 +112,8 @@ export function leasePolicyOf(config = {}) {
  */
 export function stalledReport(work, at = Date.now(), deadline = STALL_MS) {
   if (work === undefined) return undefined
+  // A proposal was never handed to anyone, so it has no lease to run out.
+  if (work.proposal !== undefined) return undefined
   if (work.report !== undefined && work.report.state !== 'progress') return undefined
   const since = work.progress?.at ?? work.lease?.at ?? work.at ?? at
   if (at - since < deadline) return undefined

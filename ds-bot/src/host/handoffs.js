@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import { TEXT_KEPT } from './constants.js'
 import { headOf } from './text.js'
-import { leasePolicyOf, normalizeReport, reportLine, stalledReport, waitsForUser, workStateOf } from './work-state.js'
+import { leasePolicyOf, normalizeReport, proactiveOf, reportLine, stalledReport, waitsForUser, workStateOf } from './work-state.js'
 
 const minutes = since => {
   const count = Math.floor((Date.now() - since) / 60_000)
@@ -26,6 +26,8 @@ export function install(rt) {
   const nameOf = id => rt.botOf(id)?.name
   // What the team does when a lease runs out: a constant, or the plugin config.
   const leasePolicy = leasePolicyOf(rt.config)
+  // How much work a Bot may start on its own, likewise.
+  const proactive = proactiveOf(rt.config)
 
   // The whole result of a work, in a file of its own: state.json is written whole on
   // every save, so it keeps only the start of a long result, and a restart would cut
@@ -110,6 +112,70 @@ export function install(rt) {
     works()[id] = { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(room ? { room } : {}), ...(above ? { parent } : {}), ...(fromRoom ? { fromRoom } : {}), ...(name ? { name } : {}), ...(child ? { child } : {}), authority: authority ?? 'delegated', lease: { at, by: to }, open: [], results: [], at }
     if (above !== undefined) above.open.push(id)
     save()
+  }
+
+  // Work a Bot starts on its own: under `observe` it is only recorded, so the user
+  // reads what the Bot would have done next to the work it belongs to, and nothing is
+  // sent; `off` refuses it above. A proposal is never put in its parent's `open`: the
+  // Bot that asked waits for the results it actually handed on, not for this.
+  function propose({ from, to, parent, text, room }) {
+    const work = String(text ?? '').replace(/\r\n?/g, '\n').trim()
+    if (from === undefined || to === undefined || work === '') return undefined
+    // The same proposal repeated in the same chat would only crowd the list.
+    const kept = headOf(work, TEXT_KEPT)
+    const earlier = Object.entries(works()).find(([, other]) => other.proposal !== undefined
+      && other.from === from && other.to === to && other.proposal.text === kept)
+    if (earlier !== undefined) return earlier[0]
+    const at = Date.now()
+    const id = randomUUID()
+    works()[id] = {
+      from,
+      to,
+      ...(room !== undefined ? { room } : {}),
+      ...(works()[parent] !== undefined ? { parent } : {}),
+      authority: 'proposed',
+      lease: { at, by: to },
+      proposal: { at, text: kept, ...(work.length > TEXT_KEPT ? { length: work.length } : {}) },
+      open: [],
+      results: [],
+      at,
+    }
+    save()
+    return id
+  }
+
+  // What a request sent from this turn is: the authority of the work the Bot answers,
+  // else what started the turn. A Bot the user spoke to, a member the user named, or a
+  // Bot that another Bot called, was asked. A member the group's admin leads speaking
+  // in turn speaks from the group's context, so what it hands on is its own initiative:
+  // that is the work the observe mode keeps as a proposal.
+  function workAuthorityOf(exec) {
+    const turn = rt.live.get(exec.agent?.id)
+    for (const id of [workOf(turn?.info), ...(turn?.joined ?? []).map(joined => workOf(joined.info))].filter(Boolean)) {
+      const authority = works()[id]?.authority
+      if (authority !== undefined) return authority
+    }
+    const { info } = turn ?? {}
+    if (info?.role === 'room') {
+      if (info.askedBy !== undefined || info.namedByUser === true) return 'asked'
+      const owner = rt.groupOwners?.get(exec.agent?.id)
+      const room = owner === undefined ? undefined : rt.roomOf(owner.roomId)
+      return room !== undefined && rt.isAdminOf?.(room, owner.botId) ? 'asked' : 'proposed'
+    }
+    if (info?.role === 'request' || info?.role === 'reply' || info?.role === 'report' || info?.role === 'stopped') return 'delegated'
+    return 'asked'
+  }
+
+  // What a Bot that wanted to send a request is told instead: `observe` recorded it,
+  // `off` did not. Undefined when the request may go out.
+  function proposalRefusal({ from, to, parent, text, room }) {
+    if (proactive === 'auto') return undefined
+    if (proactive === 'off') {
+      return 'Not sent: proactive work is off for this team, so a Bot only does what the user or another Bot asked it for.'
+    }
+    const id = propose({ from, to, parent, text, room })
+    if (id === undefined) return 'Not sent: there was nothing to record as a proposal.'
+    return `Not sent: this team runs in observe mode, so a Bot does not start work on its own. What you would have sent was recorded as a proposal (${id}) and the user sees it under "Needs you", next to the work it belongs to. Tell the user what you would have done and why; do not send it again.`
   }
 
   // A report that names something only a user can do becomes a question card in the
@@ -439,13 +505,17 @@ export function install(rt) {
     for (const [id, work] of Object.entries(works())) {
       const workStateValue = workStateOf(work)
       if (!waitsForUser(workStateValue.state)) continue
+      const kind = workStateValue.state === 'person/review' ? 'review'
+        : workStateValue.state === 'person/proposed' ? 'proposed'
+          : 'blocked'
       items.push({
-        kind: workStateValue.state === 'person/review' ? 'review' : 'blocked',
+        kind,
         botId: work.from,
         bot: rt.botOf(work.from)?.name,
         work: id,
         since: workStateValue.since,
         ...(workStateValue.summary === undefined ? {} : { summary: workStateValue.summary }),
+        ...(work.proposal !== undefined ? { proposed: true, to: rt.botOf(work.to)?.name } : {}),
       })
     }
     return items.sort((left, right) => (left.since ?? 0) - (right.since ?? 0))
@@ -525,5 +595,5 @@ export function install(rt) {
     return () => clearInterval(timer)
   }, 'ds-bot: mark work that stopped reporting')
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, activeTurns, needsYou, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, activeTurns, needsYou, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
 }

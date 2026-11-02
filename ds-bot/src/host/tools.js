@@ -188,6 +188,14 @@ export function install(rt) {
       if (name.length > NAME_MAX) return `The request_id is ${name.length} characters long; a request name is at most ${NAME_MAX}.`
       const text = absoluteLinks(String(args.message), rt.sessionFolder?.(exec.agent?.session ?? exec.agent))
       const room = rt.roomOf(rt.groupOwners.get(exec.agent?.id)?.roomId)
+      // A Bot starting work on its own is held to the team's proactive mode. It is
+      // told what happened instead of waiting for a reply that will never come.
+      const authority = rt.workAuthorityOf?.(exec) ?? 'delegated'
+      // A target outside the group is refused below; nothing is recorded for it.
+      if (authority === 'proposed' && (room === undefined || room.members.includes(target.id))) {
+        const refusal = rt.proposalRefusal?.({ from: sender.id, to: target.id, parent: worksOf(exec)[0], text: text.trim(), room: room?.id })
+        if (refusal !== undefined) return refusal
+      }
       // The request the caller named: it is admitted once, and a repeat of it is not sent again.
       const request = name === '' ? undefined : rt.requestIdentity({
         caller: sender.id,
@@ -255,7 +263,7 @@ export function install(rt) {
         const steer = (args.when !== 'queue' && !toUser && !saturated) || (joins && earlier.steered && !saturated)
         const exchangeId = joins ? earlier.message.source.exchangeId : randomUUID()
         if (joins) rt.forgetDelivery?.(exchangeId)
-        else if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work })
+        else if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work, authority })
         try {
           await rt.deliver({ fromId: sender.id, toId: target.id, text: long.text, files: [...long.files, ...(joins ? before.files : [])], length: long.length, role: 'request', steer, exchangeId, ...(joins ? { merged: true } : {}), ...(toUser ? { audience: 'user' } : {}) })
         } catch (error) {
