@@ -13,24 +13,28 @@ const { JSDOM } = createRequire(join(process.env.DSH_HARNESS ?? join(PLUGIN, '..
 
 // A minimal React stand-in: the block is a plain function component, so its tree can be
 // read without a renderer. `useState` keeps its first value, which is what a first
-// paint shows.
+// paint shows; `mount` below gives it a store, for what a click does.
 const { outputFiles } = await build({
-  stdin: { contents: "export { NeedsYou, healthLineOf, historyLines } from './src/client/need-you.js'", resolveDir: PLUGIN },
+  stdin: { contents: "export { NeedsYou, healthLineOf, historyLines, visibleItems } from './src/client/need-you.js'", resolveDir: PLUGIN },
   bundle: true, format: 'cjs', platform: 'browser', write: false, logLevel: 'silent',
   external: ['react'],
 })
+const compiled = outputFiles[0].text
+const dom = new JSDOM('<!doctype html><body></body>')
+const load = (react) => {
+  const module = { exports: {} }
+  runInNewContext(compiled, {
+    module, exports: module.exports, document: dom.window.document, window: dom.window,
+    require: name => (name === 'react' ? react : {}),
+  })
+  return module.exports
+}
 const react = {
   createElement: (type, props, ...children) => ({ type, props: { ...props, children } }),
   Fragment: Symbol('Fragment'),
   useState: initial => [initial, () => {}],
 }
-const dom = new JSDOM('<!doctype html><body></body>')
-const module = { exports: {} }
-runInNewContext(outputFiles[0].text, {
-  module, exports: module.exports, document: dom.window.document, window: dom.window,
-  require: name => (name === 'react' ? react : {}),
-})
-const { NeedsYou, healthLineOf, historyLines } = module.exports
+const { NeedsYou, healthLineOf, historyLines, visibleItems } = load(react)
 
 const flat = (children) => children.flatMap(child => (Array.isArray(child) ? flat(child) : child === undefined || child === null || child === false ? [] : [child]))
 // The stand-in does not run components, so the walk does: a component element is
@@ -43,6 +47,46 @@ const nodes = (node) => {
 const textOf = node => flat(node.props?.children ?? []).map(child => (typeof child === 'string' ? child : textOf(child))).join('')
 const buttons = tree => nodes(tree).filter(node => node.type === 'button')
 const byText = (tree, text) => buttons(tree).find(node => textOf(node) === text)
+
+// A mounted block: the tree is drawn again whenever a hook's setter runs, so a click
+// can be followed by what the block shows next. Hook calls are numbered in draw order;
+// only the top-level hooks are stable between paints, which is all these tests use.
+function mount(props) {
+  const states = []
+  let index = 0
+  let current = props
+  let element = null
+  const draw = () => {
+    index = 0
+    element = react.createElement(NeedYouComponent, current)
+    view = nodes(element)
+  }
+  let view = null
+  const reactWithStore = {
+    createElement: react.createElement,
+    Fragment: react.Fragment,
+    useState: (initial) => {
+      const at = index++
+      if (states[at] === undefined) states[at] = initial
+      return [states[at], (value) => {
+        states[at] = typeof value === 'function' ? value(states[at]) : value
+        draw()
+      }]
+    },
+  }
+  const { NeedsYou: NeedYouComponent } = load(reactWithStore)
+  draw()
+  return {
+    rows: () => view.filter(node => node.props?.['data-kind'] !== undefined),
+    button: text => view.find(node => node.type === 'button' && textOf(node) === text),
+    clicked: function (text) {
+      const button = this.button(text)
+      assert.ok(button, `no "${text}" button`)
+      button.props.onClick({ stopPropagation() {} })
+    },
+    settle: () => new Promise(resolve => setTimeout(resolve, 20)),
+  }
+}
 
 const items = () => [
   { kind: 'answer', botId: 'a', bot: 'Chief', sessionId: 'a', questionId: 'q1', question: 'Which way?', since: 1, key: 'answer:q1', options: [{ label: 'Left' }], allowCustom: true },
@@ -125,6 +169,70 @@ test('a proposal is approved from its row, and a blocked row offers no such thin
   assert.deepEqual([...approved], ['w3'])
 })
 
+test('clicking Go on takes the row away at once, and the host is told to drop it', async () => {
+  const sent = []
+  const dismissed = []
+  const ui = mount({
+    items: items(),
+    onOpen() {},
+    onAnswer() {},
+    onSend: (sessionId, text) => { sent.push([sessionId, text]); return Promise.resolve() },
+    onApprove() {},
+    onIgnore: (keys) => { dismissed.push([...keys]); return Promise.resolve() },
+    onError() {},
+  })
+  assert.equal(ui.rows().filter(row => row.props['data-kind'] === 'blocked').length, 1)
+  ui.clicked('Go on')
+  // Gone before the host has answered, so the user sees that the row was handled.
+  assert.equal(ui.rows().filter(row => row.props['data-kind'] === 'blocked').length, 0, 'the row left at once')
+  await ui.settle()
+  assert.deepEqual(sent.map(([sessionId, text]) => [sessionId, text]), [['b', 'Go on: this is handled, retry it.']])
+  assert.deepEqual(dismissed.map(keys => [...keys]), [['blocked:w1']], 'and the same work is dismissed on the host')
+})
+
+test('a reply that failed brings the row back and tells the user', async () => {
+  const errors = []
+  const ui = mount({
+    items: items(),
+    onOpen() {},
+    onAnswer() {},
+    onSend: () => Promise.reject(new Error('the Session is gone')),
+    onIgnore: () => Promise.resolve(),
+    onApprove() {},
+    onError: (error, tag) => errors.push([error?.message, tag]),
+  })
+  ui.clicked('Go on')
+  assert.equal(ui.rows().filter(row => row.props['data-kind'] === 'blocked').length, 0)
+  await ui.settle()
+  assert.equal(ui.rows().filter(row => row.props['data-kind'] === 'blocked').length, 1, 'the row is back')
+  assert.equal(ui.button('Go on') !== undefined, true)
+  assert.deepEqual(errors, [['the Session is gone', 'needs-reply']])
+})
+
+test('a dismissal the host did not take also brings the row back', async () => {
+  const errors = []
+  const ui = mount({
+    items: items(),
+    onOpen() {},
+    onAnswer() {},
+    onSend: () => Promise.resolve(),
+    onIgnore: () => Promise.reject(new Error('cannot save')),
+    onApprove() {},
+    onError: (error, tag) => errors.push([error?.message, tag]),
+  })
+  ui.clicked('Go on')
+  await ui.settle()
+  assert.equal(ui.rows().filter(row => row.props['data-kind'] === 'blocked').length, 1)
+  assert.deepEqual(errors, [['cannot save', 'needs-reply']])
+})
+
+test('a work that moves on after being handled is news again', async () => {
+  const hidden = { 'blocked:w1': 100 }
+  assert.equal(visibleItems(items(), hidden).filter(item => item.kind === 'blocked').length, 0)
+  const movedOn = items().map(item => (item.kind === 'blocked' ? { ...item, since: 101 } : item))
+  assert.equal(visibleItems(movedOn, hidden).filter(item => item.kind === 'blocked').length, 1)
+})
+
 test('a healthy team shows nothing at all', () => {
   assert.equal(NeedsYou({ items: [], onOpen() {}, onAnswer() {}, onIgnore() {} }), null)
   assert.equal(NeedsYou({ onOpen() {} }), null)
@@ -157,8 +265,7 @@ test('one work\'s history reads as a timeline from the moment it was opened', ()
     ['3m 3s', 'Blocked: needs a key'],
   ])
   assert.equal(historyLines({ kind: 'blocked', work: 'w2' }).length, 0)
-  const { historyLines: closed } = module.exports
-  assert.deepEqual(closed({
+  assert.deepEqual(historyLines({
     kind: 'blocked', work: 'w3',
     history: [{ at: 0, event: 'created' }, { at: 5_000, event: 'closed', final: 'ready' }],
   }).map(line => line.text), ['Created', 'Ended: Ready'])

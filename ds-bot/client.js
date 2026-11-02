@@ -10134,10 +10134,7 @@ function AnswerBox({ item, onAnswer }) {
 }
 function ReplyBox({ item, onSend }) {
   const [text, setText] = (0, import_react21.useState)("");
-  const send = (said) => {
-    if (item.sessionId === void 0) return;
-    onSend?.(item.sessionId, said);
-  };
+  const send = (said) => onSend?.(said);
   const submit = () => {
     const said = text.trim();
     if (said === "") return;
@@ -10184,19 +10181,65 @@ function ReplyBox({ item, onSend }) {
     )
   );
 }
-function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onApprove, onIgnore }) {
+function visibleItems(items, hidden) {
+  const list = Array.isArray(items) ? items : [];
+  return list.filter((item) => {
+    const at = hidden?.[itemKey(item)];
+    return at === void 0 || at < (item.since ?? 0);
+  });
+}
+async function replyAndDismiss({ item, said, hidden = {}, at = Date.now(), onSend, onIgnore }) {
+  const key = itemKey(item);
+  const optimistic = { ...hidden, [key]: at };
+  try {
+    await onSend?.(item.sessionId, said);
+    await onIgnore?.([key]);
+    return { ok: true, hidden: optimistic };
+  } catch (error) {
+    return { ok: false, error, hidden };
+  }
+}
+function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onApprove, onIgnore, onError }) {
   const items = Array.isArray(all_items) ? all_items : [];
   const [open, setOpen] = (0, import_react21.useState)({});
   const [all, setAll] = (0, import_react21.useState)(false);
   const [timeline, setTimeline] = (0, import_react21.useState)({});
+  const [hidden, setHidden] = (0, import_react21.useState)({});
   const trouble = healthLineOf(health);
-  if (items.length === 0 && trouble === void 0) return null;
-  const answers = items.filter((item) => item.kind === "answer");
-  const works = items.filter((item) => item.kind !== "answer");
+  const rows2 = visibleItems(items, hidden);
+  if (rows2.length === 0 && trouble === void 0) return null;
+  const answers = rows2.filter((item) => item.kind === "answer");
+  const works = rows2.filter((item) => item.kind !== "answer");
   const toggle = (key) => setOpen((prev) => ({ ...prev, [key]: !prev[key] }));
+  const sendReply = (item, said) => {
+    const key = itemKey(item);
+    const at = Date.now();
+    setHidden((prev) => ({ ...prev, [key]: at }));
+    void Promise.resolve(replyAndDismiss({ item, said, hidden, at, onSend, onIgnore })).then((result) => {
+      setHidden(result.hidden);
+      if (!result.ok) onError?.(result.error, "needs-reply");
+    }).catch((error) => {
+      setHidden((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      onError?.(error, "needs-reply");
+    });
+  };
   const dismiss = (keys) => {
     const list = keys.filter((key) => typeof key === "string" && key !== "");
-    if (list.length > 0) onIgnore?.(list);
+    if (list.length === 0) return;
+    const at = Date.now();
+    setHidden((prev) => ({ ...prev, ...Object.fromEntries(list.map((key) => [key, at])) }));
+    void Promise.resolve(onIgnore?.(list)).catch((error) => {
+      setHidden((prev) => {
+        const next = { ...prev };
+        for (const key of list) delete next[key];
+        return next;
+      });
+      onError?.(error, "needs-dismiss");
+    });
   };
   const tools = [];
   if (answers.length > 0) {
@@ -10225,13 +10268,13 @@ function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onApprov
       "div",
       { className: "bt-needs-head" },
       (0, import_react21.createElement)("span", { className: "bt-needs-title" }, zh() ? "需要你" : "Needs you"),
-      (0, import_react21.createElement)("span", { className: "bt-needs-count" }, String(items.length)),
+      (0, import_react21.createElement)("span", { className: "bt-needs-count" }, String(rows2.length)),
       tools.length === 0 ? null : (0, import_react21.createElement)("span", { className: "bt-needs-tools" }, tools)
     ),
     (0, import_react21.createElement)(
       "ul",
       { className: "bt-needs-list bt-needs-scroll" },
-      items.map((item, index) => {
+      rows2.map((item, index) => {
         const key = itemKey(item);
         const shown = all || open[key] === true;
         const shownHistory = timeline[key] === true;
@@ -10289,7 +10332,7 @@ function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onApprov
             ]
           ),
           item.kind === "answer" && shown ? (0, import_react21.createElement)(AnswerBox, { key: `answers-${index}`, item, onAnswer }) : null,
-          item.kind === "blocked" || item.kind === "review" ? (0, import_react21.createElement)(ReplyBox, { key: `reply-${index}`, item, onSend }) : null,
+          item.kind === "blocked" || item.kind === "review" ? (0, import_react21.createElement)(ReplyBox, { key: `reply-${index}`, item, onSend: (said) => sendReply(item, said) }) : null,
           item.kind !== "answer" && shownHistory ? (0, import_react21.createElement)(
             "ol",
             { className: "bt-needs-history", "aria-label": zh() ? "这件活的历史" : "History of this work" },
@@ -10898,15 +10941,13 @@ function TeamSidebar(props) {
       onAnswer: (sessionId, questionId, answer) => {
         void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer)).catch((error) => actions.reportError?.(error, "answer-question"));
       },
-      onSend: (sessionId, text) => {
-        void Promise.resolve(actions.send(sessionId, text)).catch((error) => actions.reportError?.(error, "send"));
-      },
+      // The block hides a replied row itself and puts it back when this rejects.
+      onSend: (sessionId, text) => Promise.resolve(actions.send(sessionId, text)),
       onApprove: (id) => {
         void Promise.resolve(actions.approveProposal(id)).catch((error) => actions.reportError?.(error, "approve-proposal"));
       },
-      onIgnore: (keys) => {
-        void Promise.resolve(actions.dismissNeeds(keys)).catch((error) => actions.reportError?.(error, "needs-dismiss"));
-      }
+      onIgnore: (keys) => Promise.resolve(actions.dismissNeeds(keys)),
+      onError: (error, tag = "needs") => actions.reportError?.(error, tag)
     }) : null,
     (0, import_react22.createElement)(
       "div",

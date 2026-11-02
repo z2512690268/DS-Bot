@@ -129,6 +129,18 @@ test('a work that moves on is news again, and unknown keys are ignored', async (
   assert.equal(items[0].summary, 'cannot read it')
 })
 
+test('dismissing the same item again is not an error', async (t) => {
+  const { rt, call } = await bench(t).start()
+  rt.openWork('w1', { from: 'a', to: 'b' })
+  rt.reportWork('w1', { state: 'blocked', summary: 'needs a key' })
+  const first = await call('needs-dismiss', { keys: ['blocked:w1'] })
+  const second = await call('needs-dismiss', { keys: ['blocked:w1'] })
+  assert.deepEqual([first.ok, second.ok], [true, true])
+  assert.deepEqual(rt.needsYou(), [])
+  // A row that is already gone may still be dismissed: the panel cannot know.
+  assert.equal((await call('needs-dismiss', { keys: ['blocked:nope'] })).ok, true)
+})
+
 test('the panel clears a whole inbox in one request', async (t) => {
   const { rt, call } = await bench(t).start()
   rt.openWork('w1', { from: 'a', to: 'b' })

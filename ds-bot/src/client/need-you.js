@@ -116,10 +116,7 @@ function AnswerBox({ item, onAnswer }) {
 // so its row carries a field for one and a retry, beside opening its chat.
 function ReplyBox({ item, onSend }) {
   const [text, setText] = useState('')
-  const send = (said) => {
-    if (item.sessionId === undefined) return
-    onSend?.(item.sessionId, said)
-  }
+  const send = (said) => onSend?.(said)
   const submit = () => {
     const said = text.trim()
     if (said === '') return
@@ -155,19 +152,78 @@ function ReplyBox({ item, onSend }) {
       }, zh() ? '发送' : 'Send')))
 }
 
-export function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onApprove, onIgnore }) {
+// The rows the block shows: what the host listed, minus what this window just handled.
+// The rule is the host's — a row hidden at `at` comes back once its work moves on, so
+// a new report or a new stall after the reply is news again.
+export function visibleItems(items, hidden) {
+  const list = Array.isArray(items) ? items : []
+  return list.filter((item) => {
+    const at = hidden?.[itemKey(item)]
+    return at === undefined || at < (item.since ?? 0)
+  })
+}
+
+// What a reply from a blocked row does: the row goes at once, the message goes out, and
+// only after that is the item dismissed on the host. Any failure brings the row back, so
+// a row that stayed away was really handled.
+export async function replyAndDismiss({ item, said, hidden = {}, at = Date.now(), onSend, onIgnore }) {
+  const key = itemKey(item)
+  const optimistic = { ...hidden, [key]: at }
+  try {
+    await onSend?.(item.sessionId, said)
+    await onIgnore?.([key])
+    return { ok: true, hidden: optimistic }
+  } catch (error) {
+    return { ok: false, error, hidden }
+  }
+}
+
+export function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, onApprove, onIgnore, onError }) {
   const items = Array.isArray(all_items) ? all_items : []
   const [open, setOpen] = useState({}) // per item: is its answer field shown
   const [all, setAll] = useState(false) // every answer field at once
   const [timeline, setTimeline] = useState({}) // per work: is its history shown
+  const [hidden, setHidden] = useState({}) // item key: when this window took it away
   const trouble = healthLineOf(health)
-  if (items.length === 0 && trouble === undefined) return null
-  const answers = items.filter(item => item.kind === 'answer')
-  const works = items.filter(item => item.kind !== 'answer')
+  const rows = visibleItems(items, hidden)
+  if (rows.length === 0 && trouble === undefined) return null
+  const answers = rows.filter(item => item.kind === 'answer')
+  const works = rows.filter(item => item.kind !== 'answer')
   const toggle = key => setOpen(prev => ({ ...prev, [key]: !prev[key] }))
+  // A reply takes its row away at once; the host then confirms the dismissal. A message
+  // or dismissal that failed gives the row back and tells the user, so one that stayed
+  // away is one that was handled.
+  const sendReply = (item, said) => {
+    const key = itemKey(item)
+    const at = Date.now()
+    setHidden(prev => ({ ...prev, [key]: at }))
+    void Promise.resolve(replyAndDismiss({ item, said, hidden, at, onSend, onIgnore }))
+      .then((result) => {
+        setHidden(result.hidden)
+        if (!result.ok) onError?.(result.error, 'needs-reply')
+      })
+      .catch((error) => {
+        setHidden((prev) => {
+          const next = { ...prev }
+          delete next[key]
+          return next
+        })
+        onError?.(error, 'needs-reply')
+      })
+  }
   const dismiss = (keys) => {
     const list = keys.filter(key => typeof key === 'string' && key !== '')
-    if (list.length > 0) onIgnore?.(list)
+    if (list.length === 0) return
+    const at = Date.now()
+    setHidden(prev => ({ ...prev, ...Object.fromEntries(list.map(key => [key, at])) }))
+    void Promise.resolve(onIgnore?.(list)).catch((error) => {
+      setHidden((prev) => {
+        const next = { ...prev }
+        for (const key of list) delete next[key]
+        return next
+      })
+      onError?.(error, 'needs-dismiss')
+    })
   }
   const tools = []
   if (answers.length > 0) {
@@ -192,10 +248,10 @@ export function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, o
     trouble === undefined ? null : h('div', { className: 'bt-needs-health', role: 'status', title: zh() ? '最近一小时' : 'In the last hour' }, trouble),
     h('div', { className: 'bt-needs-head' },
       h('span', { className: 'bt-needs-title' }, zh() ? '需要你' : 'Needs you'),
-      h('span', { className: 'bt-needs-count' }, String(items.length)),
+      h('span', { className: 'bt-needs-count' }, String(rows.length)),
       tools.length === 0 ? null : h('span', { className: 'bt-needs-tools' }, tools)),
     h('ul', { className: 'bt-needs-list bt-needs-scroll' },
-      items.map((item, index) => {
+      rows.map((item, index) => {
         const key = itemKey(item)
         const shown = all || open[key] === true
         const shownHistory = timeline[key] === true
@@ -243,7 +299,7 @@ export function NeedsYou({ items: all_items, health, onOpen, onAnswer, onSend, o
               }, '×'),
             ]),
           item.kind === 'answer' && shown ? h(AnswerBox, { key: `answers-${index}`, item, onAnswer }) : null,
-          item.kind === 'blocked' || item.kind === 'review' ? h(ReplyBox, { key: `reply-${index}`, item, onSend }) : null,
+          item.kind === 'blocked' || item.kind === 'review' ? h(ReplyBox, { key: `reply-${index}`, item, onSend: said => sendReply(item, said) }) : null,
           item.kind !== 'answer' && shownHistory ? h('ol', { className: 'bt-needs-history', 'aria-label': zh() ? '这件活的历史' : 'History of this work' },
             historyLines(item).map((line, at) => h('li', { key: at },
               h('span', { className: 'bt-needs-hist-time' }, line.time),
