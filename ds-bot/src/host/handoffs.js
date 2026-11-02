@@ -431,10 +431,13 @@ export function install(rt) {
     for (const [id, work] of Object.entries(works())) {
       const workStateValue = workStateOf(work)
       if (!waitsForUser(workStateValue.state)) continue
+      // The row opens the Bot that is blocked, not the one that asked: opening the
+      // asker's chat lands on the chat the user is already reading.
       items.push({
         kind: workStateValue.state === 'person/review' ? 'review' : 'blocked',
-        botId: work.from,
-        bot: rt.botOf(work.from)?.name,
+        botId: work.to ?? work.from,
+        bot: rt.botOf(work.to ?? work.from)?.name,
+        askedBy: rt.botOf(work.from)?.name,
         work: id,
         since: workStateValue.since,
         ...(workStateValue.summary === undefined ? {} : { summary: workStateValue.summary }),
