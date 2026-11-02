@@ -154,6 +154,8 @@ export function install(rt) {
       rt.warn('ds-bot: %s answered work %s, which was not open any more', name, id)
       return undefined
     }
+    rt.warn('ds-bot: closing work %s for %s: report %s, action %s, card target %s',
+      id, name, work.report?.state ?? 'none', work.report?.humanAction === undefined ? 'none' : 'yes', work.from ?? 'none')
     askAttention(work, name, id)
     delete works()[id]
     // What it still waits for comes back to it alone.
