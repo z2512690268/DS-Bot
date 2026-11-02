@@ -15270,6 +15270,10 @@ ${listed}`, { axis: "y", ...QUICK_EDGES });
 // src/client/exchange.js
 var import_react36 = require("react");
 var SHEET_EXIT_MS = 220;
+function entryWhole(entry, load) {
+  const total = entry.length ?? entry.detailLength;
+  return total === void 0 ? void 0 : { length: total, load: () => load(entry.id) };
+}
 function ExchangeDialog({ pair, roster, actions }) {
   const [entries2, setEntries] = (0, import_react36.useState)(null);
   const [leaving, setLeaving] = (0, import_react36.useState)(false);
@@ -15336,7 +15340,7 @@ function ExchangeDialog({ pair, roster, actions }) {
           const bot = roster.byId[entry.from] ?? { id: entry.from, name: t("You"), color: "gray" };
           const showDay = entry.time - lastDay > 30 * 60 * 1e3;
           lastDay = entry.time;
-          const whole = entry.length === void 0 ? void 0 : { length: entry.length, load: () => actions.exchangeText(entry.id) };
+          const whole = entryWhole(entry, (id) => actions.exchangeText(id));
           const lead = (0, import_react36.createElement)("span", { className: "bt-lead" }, (0, import_react36.createElement)(BotMark, { bot, size: 22 }));
           return (0, import_react36.createElement)(
             import_react36.Fragment,

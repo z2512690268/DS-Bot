@@ -31,14 +31,19 @@ export const failureLine = failure => `${failure.code}${failure.status ? ` ${fai
 export function answerSender(rt, id, source, text, long) {
   const back = rt.roomOf(source.senderRoomId)?.sessions?.[source.senderSessionId]
   const name = rt.botOf(rt.selfOf(id))?.name ?? 'The other Bot'
+  // What the asking Bot reads: by default the report line and where the whole reply is,
+  // not the whole reply. It is decided before the work closes, which is when its report
+  // is still on it. A reply that cannot be kept whole goes whole.
+  const delivery = rt.replyDelivery?.(source.exchangeId, text) ?? { text, slim: false }
   const work = rt.closeWork?.(source.exchangeId, name, text)
   const exchangeId = randomUUID()
   void rt.deliver({
     fromId: rt.selfOf(id),
     toId: source.senderSessionId,
     ...(back ? { sessionId: back } : {}),
-    text: long?.text ?? text,
-    ...(long?.length === undefined ? {} : { files: long.files, length: long.length }),
+    text: delivery.slim === true ? delivery.text : long?.text ?? text,
+    ...(delivery.slim === true || long?.length === undefined ? {} : { files: long.files, length: long.length }),
+    ...(delivery.detail === undefined ? {} : { detail: delivery.detail, detailLength: text.length }),
     role: 'reply',
     replyTo: source.exchangeId,
     exchangeId,

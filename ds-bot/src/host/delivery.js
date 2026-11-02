@@ -1,5 +1,7 @@
 // Delivery: how one Bot, the user, or DS Bot itself puts a message into a Bot Session.
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { HISTORY_TIMEOUT_MS, LONG_HEAD, MESSAGE_INLINE_MAX, READ_LINE_MAX, SOURCE_KIND, TEXT_KEPT, TEXT_SHOW_MAX } from './constants.js'
 import { headOf, textOf } from './text.js'
@@ -57,7 +59,7 @@ export function install(rt) {
   // length when it went as a file (attachLong). `work`: the work (handoffs.js) a
   // result that came back goes on with. `merged`: a request that takes in an earlier
   // one its recipient had not read, under that one's exchange.
-  async function deliver({ fromId, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, askedBy, namedByUser = false, fromRoomId, files = [], length, work }) {
+  async function deliver({ fromId, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, askedBy, namedByUser = false, fromRoomId, files = [], length, work, detail, detailLength }) {
     const from = rt.botOf(fromId)
     const to = rt.botOf(toId)
     if (to === undefined) throw new Error(`Unknown Bot ${toId}`)
@@ -109,7 +111,9 @@ export function install(rt) {
       // existing record; only a merged request replaces it with its added text.
       const kept = headOf(text, TEXT_KEPT)
       const whole = length !== undefined ? { length, files } : kept.length < text.length ? { length: text.length, sessionId: targetSessionId } : {}
-      const entry = { id: exchangeId, from: fromId, to: toId, text: kept, ...whole, role, time: Date.now(), ...(replyTo ? { replyTo } : {}), ...(audience === 'user' ? { audience } : {}) }
+      // `detail`: the whole reply in a file of its own, when only its report line was
+      // delivered. The dialog reads it there, so the asking Bot never held the whole text.
+      const entry = { id: exchangeId, from: fromId, to: toId, text: kept, ...whole, role, time: Date.now(), ...(replyTo ? { replyTo } : {}), ...(audience === 'user' ? { audience } : {}), ...(detail === undefined ? {} : { detail }), ...(detailLength === undefined ? {} : { detailLength }) }
       const earlier = state.exchanges.findIndex(other => other.id === exchangeId)
       if (earlier === -1) state.exchanges.push(entry)
       else if (merged) state.exchanges[earlier] = entry
@@ -122,6 +126,15 @@ export function install(rt) {
   // there is its header line, then the text. `whole` is false when only the start could
   // be read (the Session is gone, or the message is past what the dialog shows).
   async function exchangeText(entry) {
+    // A slim reply keeps its whole text in a file under the team's own folder; a path
+    // from anywhere else is not read.
+    if (typeof entry.detail === 'string' && entry.detail.startsWith(join(rt.home, 'works'))) {
+      try {
+        return { text: readFileSync(entry.detail, 'utf8'), whole: true }
+      } catch {
+        // The file is gone: the start of the reply is what is left.
+      }
+    }
     if (entry.length === undefined) return { text: entry.text, whole: true }
     if (entry.files?.length > 0) return await fileText(entry.files[0]) ?? { text: entry.text, whole: false }
     try {

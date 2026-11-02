@@ -17,7 +17,7 @@ const find = (node, match) => {
 }
 const messages = count => Array.from({ length: count }, (_, i) => ({ id: String(i), from: 'a', time: i + 1, text: `Message ${i + 1}` }))
 
-function rig(initial) {
+function rig(initial, extraActions = {}) {
   const slots = []
   const timers = new Map()
   let at = 0
@@ -74,7 +74,7 @@ function rig(initial) {
     setTimeout: (run) => { timers.set(++timer, run); return timer },
     clearTimeout: id => timers.delete(id),
   })
-  const props = { pair: ['a', 'b'], roster: { byId: {} }, actions: { exchange: () => next, closeOverlay() {} } }
+  const props = { pair: ['a', 'b'], roster: { byId: {} }, actions: { exchange: () => next, closeOverlay() {}, ...extraActions } }
   const render = () => {
     while (dirty) {
       dirty = false
@@ -93,6 +93,7 @@ function rig(initial) {
   render()
   return {
     scroller, settle,
+    exports: module.exports,
     scroll: (value) => {
       scroller.scrollTop = value
       find(tree, node => node.props.role === 'log')[0].props.onScroll?.({ currentTarget: scroller })
@@ -145,4 +146,14 @@ test('an empty exchange follows its first message when it arrives', async () => 
   await r.settle()
   await r.poll(messages(1))
   assert.equal(r.scroller.scrollTop, r.scroller.scrollHeight - r.scroller.clientHeight)
+})
+
+test('a slim reply opens its whole text from the file the entry points at', () => {
+  const loaded = []
+  const r = rig([])
+  const whole = r.exports.entryWhole({ id: '1', text: '[reported ready: done]', detail: '/team/works/w1/reply-1.md', detailLength: 4_000 }, id => loaded.push(id))
+  assert.equal(whole.length, 4_000, 'the entry says how much there is to read')
+  whole.load()
+  assert.deepEqual(loaded, ['1'], 'the whole text is read from the entry, not delivered with it')
+  assert.equal(r.exports.entryWhole({ id: '2', text: 'complete' }, () => {}), undefined)
 })

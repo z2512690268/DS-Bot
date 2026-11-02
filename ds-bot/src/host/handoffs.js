@@ -28,6 +28,11 @@ export function install(rt) {
   const leasePolicy = leasePolicyOf(rt.config)
   // How much work a Bot may start on its own, likewise.
   const proactive = proactiveOf(rt.config)
+  // Whether a reply carries its whole text to the Bot that asked, or only the report
+  // line and a pointer to the file where the whole reply is kept.
+  const replyMode = rt.config?.replyDetail === 'full' ? 'full' : 'summary'
+  // One work keeps this many replies; the newest are the ones worth reading.
+  const REPLY_KEEP = 5
 
   // What closed work leaves behind: the numbers a later question about it needs. The
   // work itself leaves `works` when it is answered, so these stay in a short log.
@@ -81,6 +86,46 @@ export function install(rt) {
     list.push(Date.now())
     if (list.length > 50) list.splice(0, list.length - 50)
     save()
+  }
+
+  // The whole reply of a work in a file of its own, so the Bot that asked reads the
+  // report line and opens the file only when the detail matters. Undefined when the
+  // file cannot be written, and then the reply goes whole: an answer is never lost.
+  function keepReply(workId, text) {
+    if (!writes() || workId === undefined) return undefined
+    const work = works()[workId]
+    const count = (work?.replies ?? 0) + 1
+    const dir = join(rt.home, 'works', resultName(workId))
+    const path = join(dir, `reply-${count}.md`)
+    try {
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(path, text, 'utf8')
+      if (work !== undefined) work.replies = count
+      if (count > REPLY_KEEP) rmSync(join(dir, `reply-${count - REPLY_KEEP}.md`), { force: true })
+      return path
+    } catch (error) {
+      rt.warn('ds-bot: reply of work %s not kept whole: %s', workId, error)
+      return undefined
+    }
+  }
+
+  // What the Bot that asked reads: what the Bot concluded, what only a user can give,
+  // and where the whole reply is. `replyDetail: 'full'` puts the text back inline.
+  function replyDelivery(workId, text) {
+    if (replyMode === 'full') return { text, slim: false }
+    const work = works()[workId]
+    if (work === undefined) return { text, slim: false }
+    const kept = keepReply(workId, text)
+    if (kept === undefined) return { text, slim: false }
+    const head = work.report === undefined ? '[ready]' : reportLine(work.report)
+    // A line the reply addressed to the user is the one thing only the user can do: it
+    // is short and it must survive the slim version.
+    const needs = text.split('\n').map(line => line.trim()).filter(line => /^needs the user:/i.test(line)).slice(0, 3)
+    return {
+      text: [head, ...needs, `[Full reply: ${kept}]`, 'Read that file when the detail matters; the user does not need it repeated.'].join('\n'),
+      slim: true,
+      detail: kept,
+    }
   }
 
   // The whole result of a work, in a file of its own: state.json is written whole on
@@ -899,5 +944,5 @@ export function install(rt) {
     return () => clearInterval(timer)
   }, 'ds-bot: mark work that stopped reporting')
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, recordProposal, approveProposal, noteWorkTurn, noteFault, workStats, workHistory, workHealth, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, recordProposal, approveProposal, noteWorkTurn, noteFault, workStats, workHistory, workHealth, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, replyDelivery, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
 }

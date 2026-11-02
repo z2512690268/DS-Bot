@@ -95,7 +95,7 @@ async function start(seed) {
     route = options
     return register(options)
   }
-  rt = createRuntime(ctx, { home })
+  rt = createRuntime(ctx, { home, replyDetail: 'full' })
   let seq = 0
   const emit = (id, type, data, extra) => {
     if (type === 'user/message') agentOf(id).session.deriveMessages().push({ role: 'user', content: data.content, source: data.source })
@@ -869,7 +869,7 @@ test('one turn keeps its identity across two earlier pages', async (t) => {
   let route
   const register = ctx.connection.fetch.register
   ctx.connection.fetch.register = (options) => { route = options; return register(options) }
-  rt = createRuntime(ctx, { home })
+  rt = createRuntime(ctx, { home, replyDetail: 'full' })
   t.after(async () => {
     await ctx.dispose()
     rmSync(home, { recursive: true, force: true, maxRetries: 5 })

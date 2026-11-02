@@ -10,6 +10,14 @@ import { t } from './i18n.js'
 
 const SHEET_EXIT_MS = 220
 
+// What "Show all" needs for one transcript entry: a long message keeps its start, and so
+// does a slim reply, whose whole text lives in its own file (`detailLength`). Undefined
+// when the entry is complete already.
+export function entryWhole(entry, load) {
+  const total = entry.length ?? entry.detailLength
+  return total === undefined ? undefined : { length: total, load: () => load(entry.id) }
+}
+
 export function ExchangeDialog({ pair, roster, actions }) {
   const [entries, setEntries] = useState(null)
   const [leaving, setLeaving] = useState(false)
@@ -62,8 +70,9 @@ export function ExchangeDialog({ pair, roster, actions }) {
               const bot = roster.byId[entry.from] ?? { id: entry.from, name: t('You'), color: 'gray' }
               const showDay = entry.time - lastDay > 30 * 60 * 1000
               lastDay = entry.time
-              // A long message comes with its start only; the rest is read on request.
-              const whole = entry.length === undefined ? undefined : { length: entry.length, load: () => actions.exchangeText(entry.id) }
+              // A long message comes with its start only; so does a slim reply, whose
+              // whole text is kept in its own file. Either is read on request, here.
+              const whole = entryWhole(entry, id => actions.exchangeText(id))
               const lead = h('span', { className: 'bt-lead' }, h(BotMark, { bot: bot, size: 22 }))
               return h(Fragment, { key: entry.id },
                 showDay ? h('time', { className: 'bt-time' }, dayLabel(entry.time)) : null,
