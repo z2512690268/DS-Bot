@@ -754,8 +754,11 @@ export function install(rt) {
           const own = rt.chatOwners.get(id)
           if (own !== undefined) rt.dropKickoff(own)
           // Any user message answers or supersedes the open question card and view card.
+          // A card a report opened is not the Bot's own question: it is the Bot that
+          // asked for the work asking the user, and the reply that came with it must not
+          // answer it before the user has seen it.
           let dropped = false
-          if (state.questions[id] !== undefined) {
+          if (state.questions[id] !== undefined && state.questions[id].attention === undefined) {
             delete state.questions[id]
             dropped = true
           }
