@@ -3481,6 +3481,8 @@ body[data-bt-layout=flat] .bt-think{max-width:calc(var(--bt-flat-w) * 100%)}
 .bt-think-time{font-variant-numeric:tabular-nums;white-space:nowrap}
 /* Five lines of the 18px line height; the rest scrolls inside the box. */
 .bt-think-text{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px;padding-left:10px;border-left:2px solid var(--bt-line-2);max-height:90px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;outline:none}
+/* An opened block reads in full: the reader asked for it, so it is not cut to a strip. */
+.bt-think[open] .bt-think-text{max-height:none;overflow:visible}
 .bt-think-text:focus-visible{border-left-color:var(--bt-ink-2)}
 .bt-think-text[data-fade=top]{mask-image:linear-gradient(to bottom,transparent,#000 18px)}
 .bt-think-text[data-fade=bottom]{mask-image:linear-gradient(to top,transparent,#000 18px)}
