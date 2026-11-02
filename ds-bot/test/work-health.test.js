@@ -149,6 +149,34 @@ test('a dismissed stall leaves the health line and the team file', async (t) => 
   assert.deepEqual(rt.dismissNeeds(['blocked:w1']), { dismissed: 1, dropped: 0 })
 })
 
+test('a stall dismissed before the cleanup existed is cleared by the next sweep', async (t) => {
+  const { rt } = await bench(t).start()
+  rt.openWork('gone', { from: 'a', to: 'b' })
+  rt.openWork('kept', { from: 'a', to: 'b' })
+  const at = Date.now() + STALL_MS + 60_000
+  rt.sweepStalled(at)
+  assert.equal(rt.workHealth().stalled, 2)
+  // A state from before the sweep cleaned up: the row was dismissed, the work stayed.
+  rt.state.dismissed = { 'blocked:gone': at }
+  assert.equal(rt.workHealth().stalled, 1, 'a dismissed stall is not unhealthy')
+  // A stalled work that handed something on is hidden too, not cleared while that runs.
+  rt.openWork('parent', { from: 'a', to: 'b' })
+  rt.openWork('child', { from: 'b', to: 'a', parent: 'parent' })
+  rt.state.works.child.lease = { at, by: 'a' }
+  rt.reportWork('parent', { state: 'blocked', summary: 'no progress for 40 min' })
+  rt.state.works.parent.report.stalled = true
+  rt.state.works.parent.stalled = { at, action: 'notify' }
+  rt.state.dismissed['blocked:parent'] = at
+  assert.equal(rt.sweepStalled(at + 60_000), true)
+  assert.equal(rt.state.works.gone, undefined, 'the dismissed stall is cleared')
+  assert.equal(rt.state.workLog.at(-1).id, 'gone')
+  assert.ok(rt.state.works.kept, 'the work the user did not dismiss stays')
+  assert.ok(rt.state.works.parent, 'and a stalled parent of live work stays')
+  assert.equal(rt.workHealth().stalled, 1, 'only the work the user did not dismiss is a stall')
+  // Nothing left to clear: a second sweep is quiet.
+  assert.equal(rt.sweepStalled(at + 120_000), false)
+})
+
 test('a work that is still running is hidden, never dropped', async (t) => {
   const { rt } = await bench(t).start()
   rt.openWork('live', { from: 'a', to: 'b' })
