@@ -97,13 +97,13 @@ dsh-superagent 的做法是把这两件事都变成字段：结果带 `state`（
 ### 收件箱
 
 - `needsYou()` 的每一条都带 `key`（`answer:<questionId>` 或 `<kind>:<workId>`），面板据此一次处理多条。
-- `needs-dismiss` 接口接受一组 key：忽略的 `proposed` 活直接丢掉，`blocked` / `review` 的活只是从列表里隐藏，状态再变（`since` 晚于忽略时刻）就重新出现。
+- `needs-dismiss` 接口接受一组 key：忽略的 `proposed` 活直接丢掉；已停滞的 `blocked` 活也真正收掉（不留残留，但它还挂着子的活时不收）；其余 `blocked` / `review` 的活只是从列表里隐藏，状态再变（`since` 晚于忽略时刻）就重新出现。
 - `approve-proposal` 接口把一条 `proposed` 的活变成真派活：记录本身变成那条请求（答案回到同一件活），原文整条保留（超过内联上限的不能批准，只能让 Bot 重提），发一次、幂等。
 - 客户端可以全部展开、逐条作答、逐条或全部忽略。
 
 ### 面板的健康与历史
 
-- `rt.workHealth()`：停滞的活数、最近一小时的投递失败数、回答失败数；全为 0 时面板不占位。
+- `rt.workHealth()`：停滞的活数、最近一小时的投递失败数、回答失败数；全为 0 时面板不占位。停滞数与 `needsYou()` 用同一套可见性规则，被用户 dismiss 的停滞不再计入。
 - `rt.workHistory(id)`：一件活从创建到结束的时间线（`created` / `proposed` / 各次 `report` / `stalled` / `closed`），开着的活读记录，关掉的活读 `workLog`；`needsYou()` 的工作条目也带上它，面板在行内展开。
 
 ### 并发
