@@ -129,6 +129,40 @@ export function isHiddenTurn(roster, sessionId, turn) {
 
 export const toolName = root => root.name || root.call?.name
 
+// What a running tool works on, cut to one short line: a shell command's first line, a
+// file name, a page address or a query. The activity row and a Bot's work line name it
+// beside the tool, so a call that takes minutes reads as progress, not a static row.
+const TARGET_CHARS = 60
+const oneLine = value => String(value ?? '').split(/[\r\n]/)[0].trim()
+const clipTarget = value => {
+  const line = oneLine(value)
+  return line.length > TARGET_CHARS ? `${line.slice(0, TARGET_CHARS - 1).trimEnd()}…` : line
+}
+const fileName = value => {
+  const parts = oneLine(value).split('/').filter(part => part !== '')
+  return parts.at(-1) ?? ''
+}
+const SHELL_TOOL = /bash|pwsh|powershell|terminal|shell|exec/i
+const FILE_TOOL = /^(read|write|edit|cat|patch|apply)|_file$|_files$/i
+const PAGE_TOOL = /fetch|browse|browser/i
+const SEARCH_TOOL = /search|grep|glob|find|list_dir/i
+
+export function toolTarget(name, arg) {
+  if (typeof arg !== 'function') return ''
+  const pick = (...keys) => {
+    for (const key of keys) {
+      const value = arg(key)
+      if (typeof value === 'string' && value.trim() !== '') return value
+    }
+    return undefined
+  }
+  if (SHELL_TOOL.test(name)) return clipTarget(pick('command', 'description'))
+  if (FILE_TOOL.test(name)) return fileName(pick('file_path', 'path', 'file'))
+  if (PAGE_TOOL.test(name)) return clipTarget(pick('url', 'query'))
+  if (SEARCH_TOOL.test(name)) return clipTarget(pick('query', 'pattern', 'path'))
+  return ''
+}
+
 export function toolArgs(root) {
   if (typeof root.args?.text === 'function') {
     return { text: key => root.args.text(key) ?? undefined, value: key => (typeof root.args.value === 'function' ? root.args.value(key) : undefined) }
