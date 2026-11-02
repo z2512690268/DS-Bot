@@ -48,6 +48,8 @@ var ZH = {
   "Waiting for your answer": "等你回答",
   "Waiting for {names}": "等 {names} 交回",
   "Needs you": "需要你",
+  "Context {percent}% · split the work": "上下文 {percent}% · 该分流",
+  "Context ~{tokens} tokens · limit unknown": "上下文约 {tokens} tokens · 上限未知",
   "Ready to review": "待验收",
   Blocked: "受阻",
   "{count} more": "还有 {count} 条",
@@ -2064,6 +2066,18 @@ function elapsedLabel(ms) {
   const hours = Math.floor(total / 3600);
   return `${hours > 0 ? `${hours}h ` : ""}${total >= 60 ? `${Math.floor(total / 60) % 60}m ` : ""}${total % 60}s`;
 }
+var shortTokens = (tokens) => {
+  if (tokens >= 1e6) return `${Math.round(tokens / 1e5) / 10}M`;
+  if (tokens >= 1e3) return `${Math.round(tokens / 1e3)}k`;
+  return String(Math.max(0, Math.round(tokens)));
+};
+function contextLineOf(budget) {
+  if (budget === null || budget === void 0 || typeof budget.tokens !== "number") return void 0;
+  if (typeof budget.percent === "number") {
+    return budget.split === true ? t("Context {percent}% · split the work", { percent: budget.percent }) : t("Context {percent}%", { percent: budget.percent });
+  }
+  return t("Context ~{tokens} tokens · limit unknown", { tokens: shortTokens(budget.tokens) });
+}
 var contentText = (content) => (content ?? []).filter((block) => block?.type === "text").map((block) => block.text).join("\n");
 var HEADER = /^\[(Message from|Reply from|Group chat|Group post from|Bot team setup|Handoff · part|Secret card)(?:[^\r\n]*\]\r?\n|[^\]\r\n]*\])/;
 var currentPart = (bot) => bot.sessionId ?? bot.id;
@@ -2637,6 +2651,8 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-row[data-kind="proposed"] .bt-needs-mark{background:var(--bt-accent);opacity:.55}
 .bt-needs-health{font-size:11px;line-height:1.4;padding:4px 6px;border-radius:8px;color:color-mix(in srgb,var(--bt-danger) 78%,var(--bt-ink));background:color-mix(in srgb,var(--bt-danger) 10%,transparent)}
 .bt-needs-stats{font-size:11px;line-height:1.4;padding:0 6px;color:color-mix(in srgb,var(--bt-ink) 50%,transparent)}
+.bt-context{font-size:11px;line-height:1.4;margin:2px 8px;color:color-mix(in srgb,var(--bt-ink) 46%,transparent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt-context-split{color:color-mix(in srgb,var(--bt-danger) 70%,var(--bt-ink))}
 .bt-needs-history{list-style:none;margin:0;padding:0 6px 4px 18px;display:flex;flex-direction:column;gap:1px;font-size:11px;color:color-mix(in srgb,var(--bt-ink) 62%,transparent)}
 .bt-needs-history li{display:flex;gap:6px;min-width:0}
 .bt-needs-hist-time{font-variant-numeric:tabular-nums;color:color-mix(in srgb,var(--bt-ink) 42%,transparent);white-space:nowrap}
@@ -10957,6 +10973,7 @@ function TeamSidebar(props) {
     (0, import_react22.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react22.createElement)(PlusIcon)),
     (0, import_react22.createElement)(AccountLauncher, { seat: false, actions })
   );
+  const contextLine = wideContent ? contextLineOf(roster.contextBudget) : void 0;
   const content = (0, import_react22.createElement)(
     "div",
     { className: wideContent ? "bt-side" : "bt-side bt-rail", onKeyDown: typeToSearch },
@@ -10979,6 +10996,12 @@ function TeamSidebar(props) {
       onIgnore: (keys) => Promise.resolve(actions.dismissNeeds(keys)),
       onError: (error, tag = "needs") => actions.reportError?.(error, tag)
     }) : null,
+    // How full the Main Bot's context is, when the usage ledger knows: one quiet line,
+    // and a nudge to split the work once it is close to the window.
+    wideContent && contextLine !== void 0 ? (0, import_react22.createElement)("div", {
+      className: `bt-context${roster.contextBudget?.split === true ? " bt-context-split" : ""}`,
+      title: roster.contextBudget?.model === void 0 ? void 0 : roster.contextBudget.model
+    }, contextLine) : null,
     (0, import_react22.createElement)(
       "div",
       { ref: listRef, className: "bt-list", role: "region", "aria-label": t("Bot list") },

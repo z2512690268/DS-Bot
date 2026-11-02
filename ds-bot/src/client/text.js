@@ -70,6 +70,26 @@ export function elapsedLabel(ms) {
   return `${hours > 0 ? `${hours}h ` : ''}${total >= 60 ? `${Math.floor(total / 60) % 60}m ` : ''}${total % 60}s`
 }
 
+// A token count short enough for a list row: 980, 298k, 1.2M.
+const shortTokens = (tokens) => {
+  if (tokens >= 1_000_000) return `${Math.round(tokens / 100_000) / 10}M`
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`
+  return String(Math.max(0, Math.round(tokens)))
+}
+
+// The Main Bot's context line: how full its window is, in one quiet phrase. A model
+// that cannot name a window shows the absolute size and says the limit is unknown; past
+// the split share, the line asks for the work to be split without interrupting anyone.
+export function contextLineOf(budget) {
+  if (budget === null || budget === undefined || typeof budget.tokens !== 'number') return undefined
+  if (typeof budget.percent === 'number') {
+    return budget.split === true
+      ? t('Context {percent}% · split the work', { percent: budget.percent })
+      : t('Context {percent}%', { percent: budget.percent })
+  }
+  return t('Context ~{tokens} tokens · limit unknown', { tokens: shortTokens(budget.tokens) })
+}
+
 export const contentText = content => (content ?? []).filter(block => block?.type === 'text').map(block => block.text).join('\n')
 // A name can contain brackets. Generated headers end at the newline; without a
 // newline, a legacy inline header still stops at its first closing bracket.

@@ -70,3 +70,14 @@ test('createClock formats month, day, and 24-hour time', () => {
   assert.equal(clock(undefined), '?')
   assert.equal(clock(Number.NaN), '?')
 })
+
+test('the context line is quiet, and asks to split the work only past the window share', async () => {
+  const { contextLineOf } = await import('../src/client/text.js')
+  assert.equal(contextLineOf(null), undefined)
+  assert.equal(contextLineOf({ tokens: 298_300, percent: 62 }), 'Context 62%')
+  assert.equal(contextLineOf({ tokens: 298_300, percent: 74, split: true }), 'Context 74% · split the work')
+  // A model that cannot name its window still shows how much there is.
+  assert.equal(contextLineOf({ tokens: 298_300 }), 'Context ~298k tokens · limit unknown')
+  assert.equal(contextLineOf({ tokens: 980 }), 'Context ~980 tokens · limit unknown')
+  assert.equal(contextLineOf({ tokens: 1_240_000 }), 'Context ~1.2M tokens · limit unknown')
+})

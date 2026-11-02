@@ -11,6 +11,8 @@ const ZH = {
   'Waiting for your answer': '等你回答',
   'Waiting for {names}': '等 {names} 交回',
   'Needs you': '需要你',
+  'Context {percent}% · split the work': '上下文 {percent}% · 该分流',
+  'Context ~{tokens} tokens · limit unknown': '上下文约 {tokens} tokens · 上限未知',
   'Ready to review': '待验收',
   Blocked: '受阻',
   '{count} more': '还有 {count} 条',

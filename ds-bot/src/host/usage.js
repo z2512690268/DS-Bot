@@ -29,6 +29,19 @@ const SLOT_MS = 15 * 60_000
 
 const count = value => (Number.isSafeInteger(value) && value > 0 ? value : 0)
 
+// How full a model's context is, from what the last call spent: its input (with the
+// cache it read and wrote) and what it wrote back is about what the next call starts
+// with. The window comes from the model's own configuration; a model that cannot name
+// one shows the absolute size only. Past this share, the panel says to split the work.
+export const CONTEXT_SPLIT_RATIO = 0.7
+export function contextBudgetOf(row, window) {
+  const tokens = (row?.input ?? 0) + (row?.cacheRead ?? 0) + (row?.cacheWrite ?? 0) + (row?.output ?? 0)
+  const size = Number.isFinite(window) && window > 0 ? window : undefined
+  if (size === undefined) return { tokens }
+  const percent = Math.round((tokens / size) * 100)
+  return { tokens, window: size, percent, split: tokens >= size * CONTEXT_SPLIT_RATIO }
+}
+
 function usageChunk(stream) {
   if (!Array.isArray(stream)) return undefined
   for (let index = stream.length - 1; index >= 0; index -= 1) {
@@ -123,6 +136,14 @@ function memoryLedger() {
       marks.set(session, mark)
     },
     add: row => calls.set(row.key, { ...row, live: true }),
+    latest(session) {
+      let found
+      for (const row of calls.values()) {
+        if (row.session !== session) continue
+        if (found === undefined || row.time >= found.time) found = row
+      }
+      return found
+    },
     owners: () => new Map(owners),
     setOwner: (session, owner) => owners.set(session, owner),
     kinds: () => new Map(kinds),
@@ -181,6 +202,7 @@ function sqliteLedger(DatabaseSync, path) {
     const putKind = db.prepare('INSERT OR REPLACE INTO kinds (session, kind) VALUES (?, ?)')
     const grouped = db.prepare(`SELECT session, provider, model, kind, time / ${SLOT_MS} AS slot, SUM(input) AS input, SUM(cache_read) AS cacheRead, SUM(cache_write) AS cacheWrite, SUM(output) AS output, COUNT(*) AS calls FROM calls GROUP BY session, provider, model, kind, slot`)
     const insert = (row, live) => put.run(row.key, row.session, row.time, row.provider, row.model, row.kind, live ? 1 : 0, row.input, row.cacheRead, row.cacheWrite, row.output)
+    const lastCall = db.prepare('SELECT session, time, provider, model, input, cache_read AS cacheRead, cache_write AS cacheWrite, output FROM calls WHERE session = ? ORDER BY time DESC LIMIT 1')
     return {
       mark(session) {
         const row = getMark.get(session)
@@ -199,6 +221,7 @@ function sqliteLedger(DatabaseSync, path) {
         }
       },
       add: row => insert(row, true),
+      latest: session => lastCall.get(session),
       owners: () => new Map(allOwners.all().map(row => [row.session, { owner: row.owner, name: row.name }])),
       setOwner: (session, owner) => putOwner.run(session, owner.owner, owner.name),
       kinds: () => new Map(allKinds.all().map(row => [row.session, row.kind])),
@@ -296,6 +319,44 @@ export function install(rt) {
     ledger = undefined
     opening = undefined
   }, 'ds-bot: usage ledger')
+
+  // How full the Main Bot's context is: the last call in its own chat spent that many
+  // tokens, so the next turn starts about there. Kept as a small snapshot the state
+  // payload reads without waiting for a database query.
+  let budget
+  const windowOf = async (row) => {
+    const sized = value => (Number.isFinite(value) && value > 0 ? value : undefined)
+    const ref = `${row.provider}/${row.model}`
+    const fromCatalog = sized(rt.cachedCatalog?.().find(item => item.ref === ref)?.contextWindow)
+    if (fromCatalog !== undefined) return fromCatalog
+    const info = await ctx.llm?.resolveModelInfo?.(row.provider, row.model).catch(() => undefined)
+    return sized(info?.context?.contextWindow) ?? sized(info?.contextWindow)
+  }
+  async function refreshContextBudget() {
+    let value
+    try {
+      await rt.load()
+      const main = (state.mainBotIds ?? []).map(id => rt.botOf(id)).filter(Boolean)[0]
+      if (main !== undefined) {
+        const sessionId = rt.chatOf(main.id)
+        const book = await openLedger()
+        const row = book.latest?.(sessionId)
+        if (row !== undefined) {
+          value = { bot: main.name, botId: main.id, sessionId, model: `${row.provider}/${row.model}`, at: row.time, ...contextBudgetOf(row, await windowOf(row)) }
+        }
+      }
+    } catch (error) {
+      rt.warn('ds-bot: context budget not read: %s', error)
+    }
+    budget = value
+    return value
+  }
+  ctx.effect(() => {
+    void refreshContextBudget()
+    const timer = setInterval(() => void refreshContextBudget(), 20_000)
+    timer.unref?.()
+    return () => clearInterval(timer)
+  }, 'ds-bot: context budget')
 
   // Who each Session's calls belong to, from the team as it is now. Sessions forked or
   // spawned under one belong to the same owner, and a parent the team has lost
@@ -649,5 +710,5 @@ export function install(rt) {
     })()
   })
 
-  Object.assign(rt, { usageView, tagUsage, carryUsageTag, ownRequest })
+  Object.assign(rt, { usageView, tagUsage, carryUsageTag, ownRequest, contextBudgetView: () => budget ?? null, refreshContextBudget })
 }

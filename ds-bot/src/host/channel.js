@@ -75,6 +75,9 @@ export function install(rt) {
     // Whether anything is wrong right now: stalled work and recent failed deliveries
     // and answers. All zero on a healthy team.
     workHealth: rt.workHealth?.() ?? null,
+    // How full the Main Bot's context is, from its last call: tokens and, when the model
+    // names one, its window and the share spent.
+    contextBudget: rt.contextBudgetView?.() ?? null,
     // Key names and who may use them; values never leave the host.
     secrets: rt.secretsView(),
     capabilities: rt.capabilityLibraryView(),
