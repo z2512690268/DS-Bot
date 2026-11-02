@@ -64,7 +64,50 @@ function AnswerBox({ item, onAnswer }) {
       }, zh() ? '发送' : 'Send')))
 }
 
-export function NeedsYou({ items, onOpen, onAnswer }) {
+// A blocked Bot is not answered by a button: it needs a word from the user to go on,
+// so its row carries a field for one and a retry, beside opening its chat.
+function ReplyBox({ item, onSend }) {
+  const [text, setText] = useState('')
+  const send = (said) => {
+    if (item.sessionId === undefined) return
+    onSend?.(item.sessionId, said)
+  }
+  const submit = () => {
+    const said = text.trim()
+    if (said === '') return
+    send(said)
+    setText('')
+  }
+  return h('div', { className: 'bt-needs-answers' },
+    h('button', {
+      type: 'button',
+      className: 'bt-needs-answer',
+      onClick: (event) => { event.stopPropagation(); send(item.kind === 'review' ? 'Looks good, go on.' : 'Go on: this is handled, retry it.') },
+    }, zh() ? '继续' : 'Go on'),
+    h('span', { className: 'bt-needs-free' },
+      h('input', {
+        type: 'text',
+        value: text,
+        placeholder: zh() ? '回它一句…' : 'Say something…',
+        'aria-label': zh() ? '回复这个 Bot' : 'Reply to this Bot',
+        onChange: event => setText(event.target.value),
+        onKeyDown: (event) => {
+          if (event.key !== 'Enter') return
+          event.preventDefault()
+          event.stopPropagation()
+          submit()
+        },
+        onClick: event => event.stopPropagation(),
+      }),
+      h('button', {
+        type: 'button',
+        className: 'bt-needs-send',
+        disabled: text.trim() === '',
+        onClick: (event) => { event.stopPropagation(); submit() },
+      }, zh() ? '发送' : 'Send')))
+}
+
+export function NeedsYou({ items, onOpen, onAnswer, onSend }) {
   if (!Array.isArray(items) || items.length === 0) return null
   const shown = items.slice(0, 4)
   const more = items.length - shown.length
@@ -85,6 +128,8 @@ export function NeedsYou({ items, onOpen, onAnswer }) {
           h('span', { className: 'bt-needs-kind' }, kindOf(item.kind)),
           h('span', { className: 'bt-needs-text' }, lineOf(item)),
           item.bot === undefined ? null : h('span', { className: 'bt-needs-bot' }, item.bot)),
-        item.kind === 'answer' ? h(AnswerBox, { key: 'answers', item, onAnswer }) : null))),
+        item.kind === 'answer'
+          ? h(AnswerBox, { key: 'answers', item, onAnswer })
+          : h(ReplyBox, { key: 'reply', item, onSend })))),
     more > 0 ? h('div', { className: 'bt-needs-more' }, zh() ? `还有 ${more} 条` : `${more} more`) : null)
 }

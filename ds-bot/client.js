@@ -10081,7 +10081,59 @@ function AnswerBox({ item, onAnswer }) {
     )
   );
 }
-function NeedsYou({ items, onOpen, onAnswer }) {
+function ReplyBox({ item, onSend }) {
+  const [text, setText] = (0, import_react21.useState)("");
+  const send = (said) => {
+    if (item.sessionId === void 0) return;
+    onSend?.(item.sessionId, said);
+  };
+  const submit = () => {
+    const said = text.trim();
+    if (said === "") return;
+    send(said);
+    setText("");
+  };
+  return (0, import_react21.createElement)(
+    "div",
+    { className: "bt-needs-answers" },
+    (0, import_react21.createElement)("button", {
+      type: "button",
+      className: "bt-needs-answer",
+      onClick: (event) => {
+        event.stopPropagation();
+        send(item.kind === "review" ? "Looks good, go on." : "Go on: this is handled, retry it.");
+      }
+    }, zh() ? "继续" : "Go on"),
+    (0, import_react21.createElement)(
+      "span",
+      { className: "bt-needs-free" },
+      (0, import_react21.createElement)("input", {
+        type: "text",
+        value: text,
+        placeholder: zh() ? "回它一句…" : "Say something…",
+        "aria-label": zh() ? "回复这个 Bot" : "Reply to this Bot",
+        onChange: (event) => setText(event.target.value),
+        onKeyDown: (event) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          event.stopPropagation();
+          submit();
+        },
+        onClick: (event) => event.stopPropagation()
+      }),
+      (0, import_react21.createElement)("button", {
+        type: "button",
+        className: "bt-needs-send",
+        disabled: text.trim() === "",
+        onClick: (event) => {
+          event.stopPropagation();
+          submit();
+        }
+      }, zh() ? "发送" : "Send")
+    )
+  );
+}
+function NeedsYou({ items, onOpen, onAnswer, onSend }) {
   if (!Array.isArray(items) || items.length === 0) return null;
   const shown = items.slice(0, 4);
   const more = items.length - shown.length;
@@ -10116,7 +10168,7 @@ function NeedsYou({ items, onOpen, onAnswer }) {
           (0, import_react21.createElement)("span", { className: "bt-needs-text" }, lineOf(item)),
           item.bot === void 0 ? null : (0, import_react21.createElement)("span", { className: "bt-needs-bot" }, item.bot)
         ),
-        item.kind === "answer" ? (0, import_react21.createElement)(AnswerBox, { key: "answers", item, onAnswer }) : null
+        item.kind === "answer" ? (0, import_react21.createElement)(AnswerBox, { key: "answers", item, onAnswer }) : (0, import_react21.createElement)(ReplyBox, { key: "reply", item, onSend })
       ))
     ),
     more > 0 ? (0, import_react21.createElement)("div", { className: "bt-needs-more" }, zh() ? `还有 ${more} 条` : `${more} more`) : null
@@ -10713,6 +10765,9 @@ function TeamSidebar(props) {
       onOpen: (id) => actions.openSession(id),
       onAnswer: (sessionId, questionId, answer) => {
         void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer)).catch((error) => actions.reportError?.(error, "answer-question"));
+      },
+      onSend: (sessionId, text) => {
+        void Promise.resolve(actions.send(sessionId, text)).catch((error) => actions.reportError?.(error, "send"));
       }
     }) : null,
     (0, import_react22.createElement)(

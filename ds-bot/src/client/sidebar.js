@@ -586,6 +586,10 @@ export function TeamSidebar(props) {
         void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer))
           .catch(error => actions.reportError?.(error, 'answer-question'))
       },
+      onSend: (sessionId, text) => {
+        void Promise.resolve(actions.send(sessionId, text))
+          .catch(error => actions.reportError?.(error, 'send'))
+      },
     }) : null,
     h('div', { ref: listRef, className: 'bt-list', role: 'region', 'aria-label': t('Bot list') },
       wideContent ? (main ? h(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : h('div', { className: 'bt-hint' }, uiNow.bootFailed ? bootHint() : t('Setting up your Main Bot…'))) : null,

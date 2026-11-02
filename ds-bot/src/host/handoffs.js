@@ -438,6 +438,7 @@ export function install(rt) {
         kind: workStateValue.state === 'person/review' ? 'review' : 'blocked',
         botId: work.to ?? work.from,
         bot: rt.botOf(work.to ?? work.from)?.name,
+        sessionId: work.to === undefined ? undefined : rt.chatOf(work.to),
         askedBy: rt.botOf(work.from)?.name,
         work: id,
         since: workStateValue.since,
