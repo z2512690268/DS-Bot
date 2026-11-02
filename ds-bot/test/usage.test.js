@@ -370,3 +370,15 @@ test('a projection hint without a sequence space is not used as a page cursor', 
   const view = (await call('usage', { timeZone: 'Asia/Shanghai' })).value
   assert.equal(totals(view)['other/chat'], 44)
 })
+
+test('both providers the team runs on fold the same way, by the header each request named', () => {
+  // The two providers a real team used on one Session: the fold follows each request's
+  // own header, so a switch mid-Session is recorded against the right one.
+  const { rows } = foldCalls([
+    header('deepseek-official', 'deepseek-flash'),
+    message(1, 0, usage(100, 10, 20)),
+    header('deepseek-account', 'deepseek-flash'),
+    message(2, 0, usage(200, 20, 30)),
+  ])
+  assert.deepEqual(rows.map(tokens), [['deepseek-flash', 100, 20, 10], ['deepseek-flash', 200, 30, 20]])
+})

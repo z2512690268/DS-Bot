@@ -93,6 +93,7 @@ test('apply registers listeners and effects in a fixed order', (t) => {
     'effect ds-bot: usage ledger',
     'effect ds-bot: context budget',
     'on llm/stream',
+    'effect ds-bot: usage scan',
     'effect ds-bot: update check',
     'effect ds-bot: dsh update install',
     'on agent/status',

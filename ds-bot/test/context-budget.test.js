@@ -41,16 +41,16 @@ function usageAt(home, rows) {
       CREATE TABLE kinds (session TEXT PRIMARY KEY, kind TEXT NOT NULL);`)
     const put = db.prepare('INSERT INTO calls (key, session, time, provider, model, kind, live, input, cache_read, cache_write, output) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     for (const [at, row] of rows.entries()) {
-      put.run(row.key ?? `k${at}`, row.session, row.time, row.provider, row.model, 'bot', row.live ?? 0, row.input, row.cacheRead ?? 0, row.cacheWrite ?? 0, row.output ?? 0)
+      put.run(row.key ?? `k${at}`, row.session, row.time, row.provider, row.model, row.kind ?? 'turn', row.live ?? 0, row.input, row.cacheRead ?? 0, row.cacheWrite ?? 0, row.output ?? 0)
     }
   } finally {
     db.close()
   }
 }
 
-async function startHost(home, { listModels = [], resolveModelInfo = async () => ({}) } = {}) {
+async function startHost(home, { listModels = [], resolveModelInfo = async () => ({}), services = {} } = {}) {
   writeFileSync(join(home, 'state.json'), JSON.stringify(seed()))
-  const ctx = fakeContext()
+  const ctx = fakeContext({ services })
   const agents = new Map()
   const agentOf = (sessionId) => {
     if (!agents.has(sessionId)) {
@@ -100,7 +100,7 @@ async function startHost(home, { listModels = [], resolveModelInfo = async () =>
     method: 'POST', body: JSON.stringify({ endpoint, payload }),
   }))).json()
   await tool('list_bots', {}, 'a')
-  return { rt, call, stop: async () => { await ctx.dispose() } }
+  return { rt, ctx, call, stop: async () => { await ctx.dispose() } }
 }
 
 function bench(t) {
@@ -156,4 +156,76 @@ test('no call in the Main Bot\'s chat means no line at all', async (t) => {
   assert.equal(host.rt.contextBudgetView(), null)
   const answer = await host.call('state', {})
   assert.equal(answer.value.contextBudget, null)
+})
+
+// The plugin's own `llm/stream` middleware, called as DSH calls it: the request the Bot
+// is making, and the stream that follows.
+async function requestSeen(host, sessionId, text) {
+  const listener = (host.ctx.listeners.get('llm/stream') ?? []).at(-1)
+  assert.ok(listener, 'the usage middleware is registered')
+  await listener({ sessionId, messages: [{ role: 'user', content: [{ type: 'text', text }] }] }, () => (async function* () {})())
+}
+
+test("the Bot's conversation turns fill the budget, not its memory or compaction calls", async (t) => {
+  const benchOf = bench(t)
+  const now = Date.now()
+  usageAt(benchOf.home, [
+    { session: 'a', time: now - 60_000, provider: 'deepseek', model: 'v4', input: 150_000, output: 1_000 },
+    { session: 'a', time: now - 1_000, provider: 'deepseek', model: 'v4', kind: 'memory', live: 1, input: 6_580, cacheRead: 512, output: 130 },
+  ])
+  const host = await benchOf.start({ resolveModelInfo: async () => ({ context: { contextWindow: 200_000 } }) })
+  await host.rt.refreshContextBudget()
+  const budget = host.rt.contextBudgetView()
+  assert.deepEqual([budget.source, budget.tokens, budget.percent], ['usage', 151_000, 76],
+    'the tiny memory-review call is newer, but it is not the conversation')
+})
+
+test("an old row with a newer request is estimated, never passed off as the current figure", async (t) => {
+  const benchOf = bench(t)
+  usageAt(benchOf.home, [{ session: 'a', time: Date.now() - 60 * 60_000, provider: 'deepseek', model: 'v4', input: 30_000, output: 1_000 }])
+  const host = await benchOf.start({ resolveModelInfo: async () => ({ context: { contextWindow: 200_000 } }) })
+  await requestSeen(host, 'a', 'x'.repeat(4_000))
+  await host.rt.refreshContextBudget()
+  const budget = host.rt.contextBudgetView()
+  assert.equal(budget.source, 'estimate')
+  assert.equal(budget.estimated, true)
+  assert.equal(budget.tokens, 1_000, 'the request is what it knows, not the old row')
+  assert.equal(budget.percent, 1)
+  assert.notEqual(budget.tokens, 31_000)
+})
+
+test('a provider that reports no usage leaves the request estimate, labelled as one', async (t) => {
+  const benchOf = bench(t)
+  const host = await benchOf.start({ resolveModelInfo: async () => ({}) })
+  await requestSeen(host, 'a', 'y'.repeat(2_000))
+  await host.rt.refreshContextBudget()
+  const budget = host.rt.contextBudgetView()
+  assert.deepEqual([budget.source, budget.estimated, budget.tokens, budget.percent], ['estimate', true, 500, undefined])
+})
+
+test('a stale row with nothing to estimate says the figure is out of date', async (t) => {
+  const benchOf = bench(t)
+  usageAt(benchOf.home, [{ session: 'a', time: Date.now() - 60 * 60_000, provider: 'deepseek', model: 'v4', input: 30_000 }])
+  const host = await benchOf.start({ resolveModelInfo: async () => ({ context: { contextWindow: 200_000 } }) })
+  const listener = (host.ctx.listeners.get('llm/stream') ?? []).at(-1)
+  await listener({ sessionId: 'a', messages: [] }, () => (async function* () {})())
+  await host.rt.refreshContextBudget()
+  const budget = host.rt.contextBudgetView()
+  assert.equal(budget.stale, true)
+  assert.equal(budget.tokens, undefined)
+  assert.equal(budget.percent, undefined)
+})
+
+test("DSH's live context projection is used when it is there", async (t) => {
+  const benchOf = bench(t)
+  const services = {
+    agents: { get: id => (id === 'a' ? { session: { id: 'a' } } : undefined) },
+    sessionProjections: {
+      snapshot: () => ({ values: { contextPressure: { projectedTokens: 120_000, contextWindow: 200_000 } } }),
+    },
+  }
+  const host = await benchOf.start({ services })
+  await host.rt.refreshContextBudget()
+  const budget = host.rt.contextBudgetView()
+  assert.deepEqual([budget.source, budget.tokens, budget.window, budget.percent, budget.split], ['session', 120_000, 200_000, 60, false])
 })

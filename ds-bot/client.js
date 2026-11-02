@@ -49,7 +49,11 @@ var ZH = {
   "Waiting for {names}": "等 {names} 交回",
   "Needs you": "需要你",
   "Context {percent}% · split the work": "上下文 {percent}% · 该分流",
+  "Context ~{percent}%": "上下文约 {percent}%",
   "Context ~{tokens} tokens · limit unknown": "上下文约 {tokens} tokens · 上限未知",
+  "Context data is out of date": "上下文数据未更新",
+  estimated: "估算",
+  "split the work": "该分流",
   "Ready to review": "待验收",
   Blocked: "受阻",
   "{count} more": "还有 {count} 条",
@@ -2072,11 +2076,14 @@ var shortTokens = (tokens) => {
   return String(Math.max(0, Math.round(tokens)));
 };
 function contextLineOf(budget) {
-  if (budget === null || budget === void 0 || typeof budget.tokens !== "number") return void 0;
-  if (typeof budget.percent === "number") {
-    return budget.split === true ? t("Context {percent}% · split the work", { percent: budget.percent }) : t("Context {percent}%", { percent: budget.percent });
-  }
-  return t("Context ~{tokens} tokens · limit unknown", { tokens: shortTokens(budget.tokens) });
+  if (budget === null || budget === void 0) return void 0;
+  if (budget.stale === true && typeof budget.tokens !== "number") return t("Context data is out of date");
+  if (typeof budget.tokens !== "number") return void 0;
+  const estimated = budget.estimated === true;
+  const percent3 = typeof budget.percent === "number" ? budget.percent : void 0;
+  const base = percent3 === void 0 ? t("Context ~{tokens} tokens · limit unknown", { tokens: shortTokens(budget.tokens) }) : estimated ? t("Context ~{percent}%", { percent: percent3 }) : budget.split === true ? t("Context {percent}% · split the work", { percent: percent3 }) : t("Context {percent}%", { percent: percent3 });
+  const split = percent3 !== void 0 && budget.split === true && estimated ? ` · ${t("split the work")}` : "";
+  return `${base}${split}${estimated ? ` · ${t("estimated")}` : ""}`;
 }
 var contentText = (content) => (content ?? []).filter((block) => block?.type === "text").map((block) => block.text).join("\n");
 var HEADER = /^\[(Message from|Reply from|Group chat|Group post from|Bot team setup|Handoff · part|Secret card)(?:[^\r\n]*\]\r?\n|[^\]\r\n]*\])/;

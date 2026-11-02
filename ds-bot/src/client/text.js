@@ -81,13 +81,22 @@ const shortTokens = (tokens) => {
 // that cannot name a window shows the absolute size and says the limit is unknown; past
 // the split share, the line asks for the work to be split without interrupting anyone.
 export function contextLineOf(budget) {
-  if (budget === null || budget === undefined || typeof budget.tokens !== 'number') return undefined
-  if (typeof budget.percent === 'number') {
-    return budget.split === true
-      ? t('Context {percent}% · split the work', { percent: budget.percent })
-      : t('Context {percent}%', { percent: budget.percent })
-  }
-  return t('Context ~{tokens} tokens · limit unknown', { tokens: shortTokens(budget.tokens) })
+  if (budget === null || budget === undefined) return undefined
+  // The ledger had nothing newer than an old row and no request to estimate from: the
+  // honest line is that the figure is out of date, not the old percentage.
+  if (budget.stale === true && typeof budget.tokens !== 'number') return t('Context data is out of date')
+  if (typeof budget.tokens !== 'number') return undefined
+  const estimated = budget.estimated === true
+  const percent = typeof budget.percent === 'number' ? budget.percent : undefined
+  const base = percent === undefined
+    ? t('Context ~{tokens} tokens · limit unknown', { tokens: shortTokens(budget.tokens) })
+    : estimated
+      ? t('Context ~{percent}%', { percent })
+      : budget.split === true
+        ? t('Context {percent}% · split the work', { percent })
+        : t('Context {percent}%', { percent })
+  const split = percent !== undefined && budget.split === true && estimated ? ` · ${t('split the work')}` : ''
+  return `${base}${split}${estimated ? ` · ${t('estimated')}` : ''}`
 }
 
 export const contentText = content => (content ?? []).filter(block => block?.type === 'text').map(block => block.text).join('\n')

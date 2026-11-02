@@ -22,6 +22,9 @@ const SCAN_PARALLEL = 4
 // A view waits this long for a scan, then answers with what it has.
 const VIEW_WAIT_MS = 6_000
 const RESCAN_AFTER_MS = 5_000
+// The ledger folds new calls on its own this often, so the history does not freeze when
+// the Usage page is closed.
+const SCAN_EVERY_MS = 60_000
 // An ended part still gets a few events (a title, a late reply) just after it ends.
 const SEAL_AFTER_MS = 60_000
 // Calls are summed per quarter hour, which every time zone offset divides.
@@ -34,12 +37,35 @@ const count = value => (Number.isSafeInteger(value) && value > 0 ? value : 0)
 // with. The window comes from the model's own configuration; a model that cannot name
 // one shows the absolute size only. Past this share, the panel says to split the work.
 export const CONTEXT_SPLIT_RATIO = 0.7
-export function contextBudgetOf(row, window) {
-  const tokens = (row?.input ?? 0) + (row?.cacheRead ?? 0) + (row?.cacheWrite ?? 0) + (row?.output ?? 0)
+// A usage row older than this, with a newer request seen since, is not the current
+// context any more: the panel says so instead of showing the old figure as today's.
+export const CONTEXT_STALE_MS = 10 * 60_000
+
+// A rough token count for a request the provider reported no usage for: about four
+// characters a token, counting the text there is and the JSON of everything else. It is
+// an estimate and is labelled as one, never shown as a measured figure.
+export function estimateTokens(messages) {
+  let chars = 0
+  const add = (value) => {
+    if (typeof value === 'string') chars += value.length
+    else if (value !== undefined && value !== null) chars += JSON.stringify(value)?.length ?? 0
+  }
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (typeof message?.content === 'string') chars += message.content.length
+    for (const block of Array.isArray(message?.content) ? message.content : []) add(block?.text ?? block)
+  }
+  return Math.round(chars / 4)
+}
+
+export function contextFigures(tokens, window) {
   const size = Number.isFinite(window) && window > 0 ? window : undefined
   if (size === undefined) return { tokens }
   const percent = Math.round((tokens / size) * 100)
   return { tokens, window: size, percent, split: tokens >= size * CONTEXT_SPLIT_RATIO }
+}
+
+export function contextBudgetOf(row, window) {
+  return contextFigures((row?.input ?? 0) + (row?.cacheRead ?? 0) + (row?.cacheWrite ?? 0) + (row?.output ?? 0), window)
 }
 
 function usageChunk(stream) {
@@ -136,10 +162,11 @@ function memoryLedger() {
       marks.set(session, mark)
     },
     add: row => calls.set(row.key, { ...row, live: true }),
-    latest(session) {
+    latest(session, kind) {
       let found
       for (const row of calls.values()) {
         if (row.session !== session) continue
+        if (kind !== undefined && row.kind !== kind) continue
         if (found === undefined || row.time >= found.time) found = row
       }
       return found
@@ -203,6 +230,7 @@ function sqliteLedger(DatabaseSync, path) {
     const grouped = db.prepare(`SELECT session, provider, model, kind, time / ${SLOT_MS} AS slot, SUM(input) AS input, SUM(cache_read) AS cacheRead, SUM(cache_write) AS cacheWrite, SUM(output) AS output, COUNT(*) AS calls FROM calls GROUP BY session, provider, model, kind, slot`)
     const insert = (row, live) => put.run(row.key, row.session, row.time, row.provider, row.model, row.kind, live ? 1 : 0, row.input, row.cacheRead, row.cacheWrite, row.output)
     const lastCall = db.prepare('SELECT session, time, provider, model, input, cache_read AS cacheRead, cache_write AS cacheWrite, output FROM calls WHERE session = ? ORDER BY time DESC LIMIT 1')
+    const lastOfKind = db.prepare('SELECT session, time, provider, model, input, cache_read AS cacheRead, cache_write AS cacheWrite, output FROM calls WHERE session = ? AND kind = ? ORDER BY time DESC LIMIT 1')
     return {
       mark(session) {
         const row = getMark.get(session)
@@ -221,7 +249,7 @@ function sqliteLedger(DatabaseSync, path) {
         }
       },
       add: row => insert(row, true),
-      latest: session => lastCall.get(session),
+      latest: (session, kind) => (kind === undefined ? lastCall.get(session) : lastOfKind.get(session, kind)),
       owners: () => new Map(allOwners.all().map(row => [row.session, { owner: row.owner, name: row.name }])),
       setOwner: (session, owner) => putOwner.run(session, owner.owner, owner.name),
       kinds: () => new Map(allKinds.all().map(row => [row.session, row.kind])),
@@ -320,18 +348,64 @@ export function install(rt) {
     opening = undefined
   }, 'ds-bot: usage ledger')
 
-  // How full the Main Bot's context is: the last call in its own chat spent that many
-  // tokens, so the next turn starts about there. Kept as a small snapshot the state
-  // payload reads without waiting for a database query.
+  // How full the Main Bot's context is. DSH's own `contextPressure` projection is the
+  // lived figure — the provider-reported prompt size of the newest request, projected
+  // for what the next one would cost, with the model's window. When that is not there
+  // (no projection service, or no usage reported yet), the ledger's last turn for the
+  // Session is used; a row with a newer request seen since is stale, and then the
+  // request is estimated rather than the old figure passed off as the current one.
   let budget
-  const windowOf = async (row) => {
-    const sized = value => (Number.isFinite(value) && value > 0 ? value : undefined)
-    const ref = `${row.provider}/${row.model}`
+  const lastTurnRequest = new Map()
+  const sized = value => (Number.isFinite(value) && value > 0 ? value : undefined)
+  const windowOfRef = async (provider, model) => {
+    if (provider === undefined || model === undefined || provider === '' || model === '') return undefined
+    const ref = `${provider}/${model}`
     const fromCatalog = sized(rt.cachedCatalog?.().find(item => item.ref === ref)?.contextWindow)
     if (fromCatalog !== undefined) return fromCatalog
-    const info = await ctx.llm?.resolveModelInfo?.(row.provider, row.model).catch(() => undefined)
+    const info = await ctx.llm?.resolveModelInfo?.(provider, model).catch(() => undefined)
     return sized(info?.context?.contextWindow) ?? sized(info?.contextWindow)
   }
+  const windowOf = row => windowOfRef(row?.provider, row?.model)
+  const windowOfBot = async (bot) => {
+    const ref = String(bot?.model ?? bot?.appliedModel ?? '')
+    const slash = ref.indexOf('/')
+    return slash === -1 ? undefined : windowOfRef(ref.slice(0, slash), ref.slice(slash + 1))
+  }
+
+  async function sessionBudget(sessionId) {
+    const projections = ctx.get?.('sessionProjections')
+    if (projections === undefined) return undefined
+    // Only a Session with a live Agent has DSH projections to read. One that is not open
+    // right now falls back to the ledger, which the periodic scan keeps current.
+    const agent = ctx.get?.('agents')?.get(sessionId)
+    if (agent === undefined) return undefined
+    let values
+    try {
+      values = projections.snapshot(agent.session, ['contextPressure'])?.values?.contextPressure
+    } catch {
+      values = undefined
+    }
+    if (values === undefined) return undefined
+    const tokens = sized(values.projectedTokens) ?? sized(values.pressureTokens)
+    if (tokens === undefined) return undefined
+    return { tokens, window: sized(values.contextWindow), source: 'session', at: Date.now() }
+  }
+
+  async function ledgerBudget(bot, sessionId) {
+    const book = await openLedger()
+    const row = book.latest?.(sessionId, 'turn')
+    const seen = lastTurnRequest.get(sessionId)
+    if (row === undefined && seen === undefined) return undefined
+    // The row is the current context while nothing newer was asked: an idle Bot's last
+    // turn is still what its next turn starts from.
+    if (row !== undefined && (seen === undefined || seen.at <= row.time)) {
+      return { tokens: contextBudgetOf(row, undefined).tokens, window: await windowOf(row), source: 'usage', at: row.time }
+    }
+    const tokens = sized(seen?.tokens)
+    if (tokens === undefined) return { stale: true, source: 'unknown', at: seen?.at ?? row?.time }
+    return { tokens, window: (await windowOf(row)) ?? (await windowOfBot(bot)), source: 'estimate', estimated: true, at: seen.at }
+  }
+
   async function refreshContextBudget() {
     let value
     try {
@@ -339,10 +413,20 @@ export function install(rt) {
       const main = (state.mainBotIds ?? []).map(id => rt.botOf(id)).filter(Boolean)[0]
       if (main !== undefined) {
         const sessionId = rt.chatOf(main.id)
-        const book = await openLedger()
-        const row = book.latest?.(sessionId)
-        if (row !== undefined) {
-          value = { bot: main.name, botId: main.id, sessionId, model: `${row.provider}/${row.model}`, at: row.time, ...contextBudgetOf(row, await windowOf(row)) }
+        const figures = (await sessionBudget(sessionId)) ?? (await ledgerBudget(main, sessionId))
+        if (figures !== undefined) {
+          const tokens = sized(figures.tokens)
+          value = {
+            bot: main.name,
+            botId: main.id,
+            sessionId,
+            ...(main.model === undefined ? {} : { model: main.model }),
+            source: figures.source,
+            ...(figures.at === undefined ? {} : { at: figures.at }),
+            ...(figures.stale === true ? { stale: true } : {}),
+            ...(figures.estimated === true ? { estimated: true } : {}),
+            ...(tokens === undefined ? {} : contextFigures(tokens, figures.window)),
+          }
         }
       }
     } catch (error) {
@@ -692,6 +776,11 @@ export function install(rt) {
     const tag = tags.get(options.messages)
     if (tag === undefined && options.sessionId !== undefined && options.purpose === undefined) {
       noteSession(options.sessionId)
+      // What this request carried is the best figure there is when the provider reports
+      // no usage: the estimate is labelled as one, never shown as a measured size.
+      // Recorded even when nothing could be counted (0): a request that left no estimate
+      // is still newer than the ledger's last row, so the old figure must not pose as now.
+      lastTurnRequest.set(options.sessionId, { at: Date.now(), tokens: estimateTokens(options.messages) })
       return next()
     }
     return (async function* meter() {
@@ -709,6 +798,16 @@ export function install(rt) {
       }
     })()
   })
+
+  // The Usage page is not always open, and without a reader the ledger would freeze while
+  // the team works; the token history and the 24-hour figures both come from it.
+  ctx.effect(() => {
+    const timer = setInterval(() => {
+      if (ledger !== undefined) void scan().catch(() => {})
+    }, SCAN_EVERY_MS)
+    timer.unref?.()
+    return () => clearInterval(timer)
+  }, 'ds-bot: usage scan')
 
   Object.assign(rt, { usageView, tagUsage, carryUsageTag, ownRequest, contextBudgetView: () => budget ?? null, refreshContextBudget })
 }

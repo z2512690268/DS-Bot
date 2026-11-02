@@ -80,4 +80,10 @@ test('the context line is quiet, and asks to split the work only past the window
   assert.equal(contextLineOf({ tokens: 298_300 }), 'Context ~298k tokens · limit unknown')
   assert.equal(contextLineOf({ tokens: 980 }), 'Context ~980 tokens · limit unknown')
   assert.equal(contextLineOf({ tokens: 1_240_000 }), 'Context ~1.2M tokens · limit unknown')
+  // An estimate is labelled as one, never shown as a measured figure.
+  assert.equal(contextLineOf({ tokens: 120_000, window: 200_000, percent: 60, estimated: true }), 'Context ~60% · estimated')
+  assert.equal(contextLineOf({ tokens: 152_000, window: 200_000, percent: 76, split: true, estimated: true }), 'Context ~76% · split the work · estimated')
+  assert.equal(contextLineOf({ tokens: 298_300, estimated: true }), 'Context ~298k tokens · limit unknown · estimated')
+  // An old figure with no way to estimate is not shown as the current one.
+  assert.equal(contextLineOf({ stale: true }), 'Context data is out of date')
 })
