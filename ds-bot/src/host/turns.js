@@ -823,14 +823,15 @@ export function install(rt) {
         // A turn stopped for a switch goes on in the next part, which answers instead.
         const switched = entry.switched === true
         entry.turn = undefined
-        // A message that arrived during this turn waits for the next one. If it is
-        // still waiting now that the turn has ended, nothing woke the Session, and
-        // the message sits in the chat until something else starts a turn.
+        // A message that arrived during this turn waits for the next one. Nothing
+        // else starts that turn — the wake a delivery sends was consumed by this
+        // turn — so its reply would sit in the chat until something else did. Start
+        // it here, from the message that is already in the queue.
         void Promise.resolve()
           .then(() => rt.resolveAgent?.(id))
           .then((agent) => {
-            const waiting = [...(agent?.inbox?.nextTurn ?? [])].length
-            if (waiting > 0) rt.warn('ds-bot: %s ended a turn with %d message(s) still waiting for the next one', id, waiting)
+            if ([...(agent?.inbox?.nextTurn ?? [])].length === 0) return
+            try { agent.wakeDriver?.() } catch (error) { rt.warn('ds-bot: %s not woken for its waiting message: %s', id, error) }
           })
           .catch(() => {})
         entry.info = undefined
