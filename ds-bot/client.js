@@ -1744,6 +1744,7 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     updateRoom: (id, patch) => after(call2("update-room", { id, ...patch })),
     send: (sessionId, text) => after(call2("send", { sessionId: partFor(sessionId), text })),
     answerQuestion: (sessionId, questionId, answer) => after(call2("answer-question", { sessionId: partFor(sessionId), questionId, answer })),
+    dismissNeeds: (keys) => after(call2("needs-dismiss", { keys })),
     dismissQuestion: (sessionId) => after(call2("dismiss-question", { sessionId })),
     answerView: (sessionId, viewId, action, values) => after(call2("view-reply", { sessionId: partFor(sessionId), viewId, action, values })),
     dismissView: (sessionId) => after(call2("dismiss-view", { sessionId: partFor(sessionId) })),
@@ -2624,6 +2625,15 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-free input{flex:1 1 auto;min-width:0;font:inherit;font-size:11px;padding:2px 6px;border-radius:6px;border:1px solid color-mix(in srgb,var(--bt-ink) 18%,transparent);background:transparent;color:inherit}
 .bt-needs-send{font:inherit;font-size:11px;padding:2px 8px;border-radius:6px;border:1px solid color-mix(in srgb,var(--bt-accent) 40%,transparent);background:transparent;color:var(--bt-accent);cursor:pointer}
 .bt-needs-send:disabled{opacity:.4;cursor:default}
+.bt-needs-tools{margin-left:auto;display:flex;align-items:center;gap:4px}
+.bt-needs-tool{font:inherit;font-size:10px;line-height:1;padding:2px 6px;border-radius:999px;border:1px solid color-mix(in srgb,var(--bt-ink) 18%,transparent);background:transparent;color:color-mix(in srgb,var(--bt-ink) 68%,transparent);cursor:pointer;white-space:nowrap}
+.bt-needs-tool:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.bt-needs-entry{display:flex;flex-direction:column;min-width:0}
+.bt-needs-line{display:flex;align-items:center;gap:2px;min-width:0}
+.bt-needs-line .bt-needs-row{flex:1 1 auto;min-width:0}
+.bt-needs-ignore{color:color-mix(in srgb,var(--bt-ink) 40%,transparent)}
+.bt-needs-scroll{max-height:38vh;overflow-y:auto;overscroll-behavior:contain}
+.bt-needs-row[data-kind="proposed"] .bt-needs-mark{background:var(--bt-accent);opacity:.55}
 
 /* Chromium ignores ::-webkit-scrollbar when scrollbar-width or scrollbar-color (inherited) is non-auto. */
 .bt-side:not(.bt-rail)>.bt-list{margin-right:-12px;scrollbar-gutter:stable;scrollbar-width:auto;scrollbar-color:auto}
@@ -10021,12 +10031,14 @@ var zh = () => language().startsWith("zh");
 var kindOf = (kind) => {
   if (kind === "answer") return zh() ? "等你回答" : "Waits for your answer";
   if (kind === "blocked") return zh() ? "受阻" : "Blocked";
+  if (kind === "proposed") return zh() ? "我本来会做" : "I would have done";
   return zh() ? "待验收" : "Ready to review";
 };
 var lineOf = (item) => {
   if (item.kind === "answer") return item.question ?? "";
   return item.summary ?? item.detail ?? "";
 };
+var itemKey = (item) => item.key ?? (item.kind === "answer" ? `answer:${item.questionId}` : `${item.kind}:${item.work}`);
 function AnswerBox({ item, onAnswer }) {
   const [text, setText] = (0, import_react21.useState)("");
   const options = Array.isArray(item.options) ? item.options.slice(0, 3) : [];
@@ -10081,10 +10093,36 @@ function AnswerBox({ item, onAnswer }) {
     )
   );
 }
-function NeedsYou({ items, onOpen, onAnswer }) {
+function NeedsYou({ items, onOpen, onAnswer, onIgnore }) {
+  const [open, setOpen] = (0, import_react21.useState)({});
+  const [all, setAll] = (0, import_react21.useState)(false);
   if (!Array.isArray(items) || items.length === 0) return null;
-  const shown = items.slice(0, 4);
-  const more = items.length - shown.length;
+  const answers = items.filter((item) => item.kind === "answer");
+  const works = items.filter((item) => item.kind !== "answer");
+  const toggle = (key) => setOpen((prev) => ({ ...prev, [key]: !prev[key] }));
+  const dismiss = (keys) => {
+    const list = keys.filter((key) => typeof key === "string" && key !== "");
+    if (list.length > 0) onIgnore?.(list);
+  };
+  const tools = [];
+  if (answers.length > 0) {
+    tools.push((0, import_react21.createElement)("button", {
+      key: "all",
+      type: "button",
+      className: "bt-needs-tool",
+      "aria-expanded": all,
+      onClick: () => setAll((value) => !value)
+    }, all ? zh() ? "收起" : "Collapse" : zh() ? "全部展开" : "Expand all"));
+  }
+  if (works.length > 0) {
+    tools.push((0, import_react21.createElement)("button", {
+      key: "ignore",
+      type: "button",
+      className: "bt-needs-tool",
+      title: zh() ? "从列表里清掉这些工作，不影响对话" : "Clear these works from the list; the chats stay as they are",
+      onClick: () => dismiss(works.map(itemKey))
+    }, zh() ? `全部忽略 ${works.length}` : `Ignore ${works.length}`));
+  }
   return (0, import_react21.createElement)(
     "section",
     { className: "bt-needs", "aria-label": zh() ? "需要你" : "Needs you" },
@@ -10092,34 +10130,54 @@ function NeedsYou({ items, onOpen, onAnswer }) {
       "div",
       { className: "bt-needs-head" },
       (0, import_react21.createElement)("span", { className: "bt-needs-title" }, zh() ? "需要你" : "Needs you"),
-      (0, import_react21.createElement)("span", { className: "bt-needs-count" }, String(items.length))
+      (0, import_react21.createElement)("span", { className: "bt-needs-count" }, String(items.length)),
+      tools.length === 0 ? null : (0, import_react21.createElement)("span", { className: "bt-needs-tools" }, tools)
     ),
     (0, import_react21.createElement)(
       "ul",
-      { className: "bt-needs-list" },
-      shown.map((item, index) => (0, import_react21.createElement)(
-        "li",
-        { key: `${item.kind}-${item.work ?? item.questionId ?? index}` },
-        (0, import_react21.createElement)(
-          "button",
-          {
-            type: "button",
-            className: "bt-needs-row",
-            "data-kind": item.kind,
-            title: [item.bot, lineOf(item)].filter(Boolean).join(" · "),
-            onClick: () => {
-              if (item.botId !== void 0) onOpen?.(item.botId);
-            }
-          },
-          (0, import_react21.createElement)("span", { className: "bt-needs-mark", "aria-hidden": true }),
-          (0, import_react21.createElement)("span", { className: "bt-needs-kind" }, kindOf(item.kind)),
-          (0, import_react21.createElement)("span", { className: "bt-needs-text" }, lineOf(item)),
-          item.bot === void 0 ? null : (0, import_react21.createElement)("span", { className: "bt-needs-bot" }, item.bot)
-        ),
-        item.kind === "answer" ? (0, import_react21.createElement)(AnswerBox, { key: "answers", item, onAnswer }) : null
-      ))
-    ),
-    more > 0 ? (0, import_react21.createElement)("div", { className: "bt-needs-more" }, zh() ? `还有 ${more} 条` : `${more} more`) : null
+      { className: "bt-needs-list bt-needs-scroll" },
+      items.map((item, index) => {
+        const key = itemKey(item);
+        const shown = all || open[key] === true;
+        return (0, import_react21.createElement)(
+          "li",
+          { className: "bt-needs-entry", key },
+          (0, import_react21.createElement)(
+            "div",
+            { className: "bt-needs-line" },
+            (0, import_react21.createElement)(
+              "button",
+              {
+                type: "button",
+                className: "bt-needs-row",
+                "data-kind": item.kind,
+                title: [item.bot, item.proposed === true && item.to !== void 0 ? `→ ${item.to}` : void 0, lineOf(item)].filter(Boolean).join(" · "),
+                onClick: () => {
+                  if (item.botId !== void 0) onOpen?.(item.botId);
+                }
+              },
+              (0, import_react21.createElement)("span", { className: "bt-needs-mark", "aria-hidden": true }),
+              (0, import_react21.createElement)("span", { className: "bt-needs-kind" }, kindOf(item.kind)),
+              (0, import_react21.createElement)("span", { className: "bt-needs-text" }, lineOf(item)),
+              item.bot === void 0 ? null : (0, import_react21.createElement)("span", { className: "bt-needs-bot" }, item.bot)
+            ),
+            item.kind === "answer" ? (0, import_react21.createElement)("button", {
+              type: "button",
+              className: "bt-needs-tool bt-needs-open",
+              "aria-expanded": shown,
+              onClick: () => toggle(key)
+            }, zh() ? "答" : "Answer") : (0, import_react21.createElement)("button", {
+              type: "button",
+              className: "bt-needs-tool bt-needs-ignore",
+              title: zh() ? "忽略这一条" : "Ignore this one",
+              "aria-label": zh() ? "忽略这一条" : "Ignore this one",
+              onClick: () => dismiss([key])
+            }, "×")
+          ),
+          item.kind === "answer" && shown ? (0, import_react21.createElement)(AnswerBox, { key: `answers-${index}`, item, onAnswer }) : null
+        );
+      })
+    )
   );
 }
 
@@ -10713,6 +10771,9 @@ function TeamSidebar(props) {
       onOpen: (id) => actions.openSession(id),
       onAnswer: (sessionId, questionId, answer) => {
         void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer)).catch((error) => actions.reportError?.(error, "answer-question"));
+      },
+      onIgnore: (keys) => {
+        void Promise.resolve(actions.dismissNeeds(keys)).catch((error) => actions.reportError?.(error, "needs-dismiss"));
       }
     }) : null,
     (0, import_react22.createElement)(

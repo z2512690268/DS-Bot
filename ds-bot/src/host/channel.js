@@ -387,6 +387,16 @@ export function install(rt) {
             await rt.save()
           }
           return ok(true)
+        case 'needs-dismiss': {
+          // One list of items the user does not want to act on, sent in one request so
+          // a whole inbox can be cleared without a round trip per row.
+          await rt.load()
+          const keys = Array.isArray(body.keys)
+            ? [...new Set(body.keys.filter(key => typeof key === 'string' && key !== '' && key.length <= 200))]
+            : []
+          if (keys.length === 0) return fail('Nothing to dismiss', 'bot/invalid')
+          return ok(rt.dismissNeeds(keys))
+        }
         case 'dismiss-view':
           await rt.load()
           if (rt.own(state.views, body.sessionId) !== undefined) {

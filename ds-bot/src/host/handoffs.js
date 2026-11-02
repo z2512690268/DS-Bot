@@ -529,9 +529,13 @@ export function install(rt) {
     }
   }
 
+  // The key a panel sends back to ignore one item: what it is, and which one, so that
+  // ignoring a work does not hide the next state the same work comes back in.
+  const needKey = item => (item.kind === 'answer' ? `answer:${item.questionId}` : `${item.kind}:${item.work}`)
+
   // Everything that waits for the user, in one list: the question cards the team has
-  // open, and the work that came back blocked or failed. It is what a panel or a
-  // summary needs to answer "does anything need me now".
+  // open, and the work that came back blocked, failed, ready to review or proposed. It
+  // is what a panel or a summary needs to answer "does anything need me now".
   const needsYou = () => {
     const items = []
     const botOfChat = (sessionId) => {
@@ -570,7 +574,43 @@ export function install(rt) {
         ...(work.proposal !== undefined ? { proposed: true, to: rt.botOf(work.to)?.name } : {}),
       })
     }
-    return items.sort((left, right) => (left.since ?? 0) - (right.since ?? 0))
+    // What the user ignored stays hidden until that work or question moves on: an item
+    // whose state began after the dismissal is news again.
+    const dismissed = state.dismissed ?? {}
+    return items
+      .map(item => ({ ...item, key: needKey(item) }))
+      .filter((item) => {
+        const at = dismissed[item.key]
+        return at === undefined || at < (item.since ?? 0)
+      })
+      .sort((left, right) => (left.since ?? 0) - (right.since ?? 0))
+  }
+
+  // The user does not want to act on these: an ignored proposal is dropped for good,
+  // and a work that is still open is only hidden from the list.
+  function dismissNeeds(keys) {
+    const at = Date.now()
+    const dismissed = (state.dismissed ??= {})
+    let dropped = 0
+    for (const key of keys) {
+      const colon = key.indexOf(':')
+      const kind = key.slice(0, colon)
+      const id = key.slice(colon + 1)
+      if (colon < 1 || id === '' || !['answer', 'blocked', 'review', 'proposed'].includes(kind)) continue
+      dismissed[key] = at
+      if (kind === 'proposed' && works()[id] !== undefined) {
+        dropWork(id)
+        dropped += 1
+      }
+    }
+    // One entry per ignored item: the oldest go first, so the map cannot grow forever.
+    const entries = Object.entries(dismissed)
+    if (entries.length > 400) {
+      entries.sort((left, right) => left[1] - right[1])
+      for (const [key] of entries.slice(0, entries.length - 400)) delete dismissed[key]
+    }
+    save()
+    return { dismissed: keys.length, dropped }
   }
 
   // How long the work went without a word, the same way the report says it.
@@ -647,5 +687,5 @@ export function install(rt) {
     return () => clearInterval(timer)
   }, 'ds-bot: mark work that stopped reporting')
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, noteWorkTurn, workStats, activeTurns, needsYou, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, noteWorkTurn, workStats, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
 }

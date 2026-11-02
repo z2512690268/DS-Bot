@@ -106,6 +106,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     updateRoom: (id, patch) => after(call('update-room', { id, ...patch })),
     send: (sessionId, text) => after(call('send', { sessionId: partFor(sessionId), text })),
     answerQuestion: (sessionId, questionId, answer) => after(call('answer-question', { sessionId: partFor(sessionId), questionId, answer })),
+    dismissNeeds: keys => after(call('needs-dismiss', { keys })),
     dismissQuestion: sessionId => after(call('dismiss-question', { sessionId })),
     answerView: (sessionId, viewId, action, values) => after(call('view-reply', { sessionId: partFor(sessionId), viewId, action, values })),
     dismissView: sessionId => after(call('dismiss-view', { sessionId: partFor(sessionId) })),
