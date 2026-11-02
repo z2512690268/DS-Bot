@@ -91,7 +91,11 @@ export function install(rt) {
       ],
       source,
     })
-    if (steer) agent.steer(message)
+    // A reply is the result of work the target is waiting for: when its turn is
+    // already running, the reply cuts in at the next step, so the Bot acts on it now
+    // instead of after a turn it may have spent waiting for it.
+    const running = rt.live.get(targetSessionId)?.turn !== undefined
+    if (steer || (role === 'reply' && running)) agent.steer(message)
     else agent.followup(message)
     await ctx.sessions.flush(agent.session)
     if (EXCHANGE_ROLES.has(role) && !deferred && !resumed && !retried) {
