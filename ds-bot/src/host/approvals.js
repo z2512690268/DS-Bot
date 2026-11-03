@@ -166,7 +166,15 @@ export function install(rt) {
     for (const entry of pending.values()) {
       if (entry.roomId !== undefined || entry.answer === undefined) continue
       const group = groups.get(entry.sessionId) ?? { botId: entry.botId, sessionId: entry.sessionId, approvals: [] }
-      group.approvals.push({ id: entry.id, tool: entry.tool, reason: entry.reason, unsure: entry.unsure, at: entry.at })
+      group.approvals.push({
+        id: entry.id,
+        tool: entry.tool,
+        reason: entry.reason,
+        ...(entry.detail?.code === undefined ? {} : { detail: entry.detail.code }),
+        ...(entry.detail?.text === undefined ? {} : { description: entry.detail.text }),
+        unsure: entry.unsure,
+        at: entry.at,
+      })
       groups.set(entry.sessionId, group)
     }
     return [...groups.values()].map((group) => {

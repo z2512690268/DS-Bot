@@ -309,12 +309,14 @@ export function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, on
       return h('ul', { key: `approvals-${index}`, className: 'bt-needs-approvals', 'aria-label': zh() ? '等你逐条批准' : 'Approvals waiting for you' },
         approvals.map(one => h('li', { key: one.id, className: 'bt-needs-approval' },
           h('span', { className: 'bt-needs-approval-tool' }, one.tool || (zh() ? '某个工具' : 'a tool')),
+          one.detail === undefined ? null : h('code', { className: 'bt-needs-approval-code' }, one.detail),
           one.reason === '' ? null : h('span', { className: 'bt-needs-approval-reason' }, one.reason),
           one.unsure === undefined ? null : h('span', { className: 'bt-needs-unsure' }, `${zh() ? '我拿不准' : 'Not sure'}: ${one.unsure}`),
           approvalButtons(one))))
     }
     const one = approvals[0]
     return h('div', { key: `approval-${index}`, className: 'bt-needs-approval-detail' },
+      one.detail === undefined ? null : h('code', { className: 'bt-needs-approval-code' }, one.detail),
       one.reason === '' ? null : h('span', { className: 'bt-needs-approval-reason' }, one.reason),
       h('span', { className: 'bt-needs-unsure' }, `${zh() ? '我拿不准' : 'Not sure'}: ${one.unsure ?? (zh() ? '需要你决定' : 'needs your decision')}`))
   }

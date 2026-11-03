@@ -293,13 +293,14 @@ const approvalItem = (approvals) => [{
   ...(approvals.length > 1 ? { more: approvals.length - 1 } : {}),
   approvals,
 }]
-const approvalOne = (id, at = 10) => ({ id, tool: 'pwsh', reason: 'escalate sandbox to danger-full-access: install deps', unsure: 'no rule covers this request', at })
+const approvalOne = (id, at = 10) => ({ id, tool: 'pwsh', reason: 'escalate sandbox to danger-full-access: install deps', detail: 'npm install --prefix /tmp/profile-copy', unsure: 'no rule covers this request', at })
 
 test('an approval says what it is for, why the team is unsure, and both answers', () => {
   const tree = NeedsYou({ items: approvalItem([approvalOne('ap1')]), onOpen() {}, onApproval() {}, onError() {} })
   assert.match(textOf(tree), /Waiting for approval/)
   assert.match(textOf(tree), /pwsh: escalate sandbox to danger-full-access: install deps/)
   assert.match(textOf(tree), /Not sure: no rule covers this request/)
+  assert.match(textOf(tree), /npm install --prefix \/tmp\/profile-copy/, 'the object being escalated is shown')
   assert.ok(byText(tree, 'Allow once'))
   assert.ok(byText(tree, 'Reject'))
   assert.equal(byText(tree, 'History'), undefined, 'an approval has no work history')
