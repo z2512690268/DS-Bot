@@ -51,7 +51,6 @@ function cellValue(c, shared, fmt, epoch = 25569) {
   if (t === 's' && value !== undefined) value = shared[Number(value)] ?? `#SST${value}`
   else if (t === 'b') value = value === '1'
   else if (t === 'str' || t === 'inlineStr') value = t === 'inlineStr' ? textOf(firstOf(c, 'is') ?? c) : value
-  else if (t === 'e') value = value // error text as stored
   else if (value !== undefined && fmt.get(Number(c.getAttribute('s') ?? 0)) === 'date' && !Number.isNaN(Number(value))) {
     const days = Number(value) - epoch
     value = new Date(days * 86400_000).toISOString().slice(0, value.includes('.') ? 19 : 10)
