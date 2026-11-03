@@ -307,6 +307,13 @@ body[data-ds-dark-theme] .bt-q{--bt-q-edge:rgba(255,255,255,.16);--bt-q-rule:rgb
 .bt-q-text{flex:1 1 0;min-width:0;display:flex;flex-direction:column}
 .bt-q-title{margin:0;font-size:15px;line-height:22px;font-weight:600;overflow-wrap:anywhere}
 .bt-q-detail{font-size:13px;line-height:18px;color:var(--bt-ink-2)}
+.bt-q-detail[data-card-collapsed="true"]{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.bt-q[data-card-expanded="true"] .bt-q-detail[data-card-collapsed]{display:block;-webkit-line-clamp:unset;overflow:visible}
+.bt-q-more{align-self:flex-start;margin:0;padding:0;border:0;background:none;color:var(--bt-accent);font:inherit;font-size:12px;line-height:18px;cursor:pointer}
+.bt-q-more:hover{text-decoration:underline}
+.bt-card-flash{animation:bt-card-flash 1.5s ease-out}
+@keyframes bt-card-flash{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--bt-accent) 0%,transparent)}20%,60%{box-shadow:0 0 0 3px color-mix(in srgb,var(--bt-accent) 40%,transparent)}}
+.bt-card-expanded [data-approval-scroll]{max-height:none!important;overflow:visible!important}
 .bt-q-x{flex:none;width:20px;height:20px;border:0;padding:0;border-radius:6px;background:none;color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, 'scale')}}
 .bt-q-x svg{width:14px;height:14px}
 .bt-q-x:hover{background:var(--bt-hover);color:var(--bt-ink)}

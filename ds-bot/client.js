@@ -2818,6 +2818,13 @@ body[data-ds-dark-theme] .bt-q{--bt-q-edge:rgba(255,255,255,.16);--bt-q-rule:rgb
 .bt-q-text{flex:1 1 0;min-width:0;display:flex;flex-direction:column}
 .bt-q-title{margin:0;font-size:15px;line-height:22px;font-weight:600;overflow-wrap:anywhere}
 .bt-q-detail{font-size:13px;line-height:18px;color:var(--bt-ink-2)}
+.bt-q-detail[data-card-collapsed="true"]{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.bt-q[data-card-expanded="true"] .bt-q-detail[data-card-collapsed]{display:block;-webkit-line-clamp:unset;overflow:visible}
+.bt-q-more{align-self:flex-start;margin:0;padding:0;border:0;background:none;color:var(--bt-accent);font:inherit;font-size:12px;line-height:18px;cursor:pointer}
+.bt-q-more:hover{text-decoration:underline}
+.bt-card-flash{animation:bt-card-flash 1.5s ease-out}
+@keyframes bt-card-flash{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--bt-accent) 0%,transparent)}20%,60%{box-shadow:0 0 0 3px color-mix(in srgb,var(--bt-accent) 40%,transparent)}}
+.bt-card-expanded [data-approval-scroll]{max-height:none!important;overflow:visible!important}
 .bt-q-x{flex:none;width:20px;height:20px;border:0;padding:0;border-radius:6px;background:none;color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, "scale")}}
 .bt-q-x svg{width:14px;height:14px}
 .bt-q-x:hover{background:var(--bt-hover);color:var(--bt-ink)}
@@ -4715,12 +4722,25 @@ function useOptionKeys(count, onPick, ownRef) {
 function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false, ownAnswer = false, raised = false, enterToSend = true }) {
   const [own, setOwn] = (0, import_react8.useState)("");
   const [picked, setPicked] = (0, import_react8.useState)([]);
+  const [full2, setFull] = (0, import_react8.useState)(false);
   const ownRef = (0, import_react8.useRef)(null);
   const titleId = (0, import_react8.useId)();
   const options = optionsOf(question);
   const multi = question.multiSelect === true;
   const custom = own.trim();
   const canSubmit = multi ? picked.length > 0 || custom !== "" : custom !== "";
+  const longDetail = typeof question.detail === "string" && question.detail.length > 240;
+  const detail = question.detail ? (0, import_react8.createElement)("div", { className: "bt-q-detail", ...longDetail ? { "data-card-collapsed": full2 ? "false" : "true" } : {} }, question.detail) : null;
+  const more = longDetail ? (0, import_react8.createElement)("button", {
+    type: "button",
+    className: "bt-q-more",
+    "data-card-toggle": "",
+    "aria-expanded": full2,
+    onClick: (event) => {
+      event.stopPropagation();
+      setFull((value) => !value);
+    }
+  }, full2 ? t("Show less") : t("Show more")) : null;
   const choose = (label) => {
     if (busy) return;
     onInteract?.();
@@ -4808,6 +4828,7 @@ function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false,
       className: raised ? "bt-q bt-q-raised" : "bt-q",
       "aria-labelledby": titleId,
       "aria-busy": busy || void 0,
+      "data-question-id": question.id,
       onFocusCapture: onInteract,
       onPointerDownCapture: onInteract,
       onSubmit: (event) => {
@@ -4822,7 +4843,8 @@ function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false,
         "div",
         { className: "bt-q-text" },
         (0, import_react8.createElement)("p", { className: "bt-q-title", id: titleId }, question.header ? `${question.header} · ` : "", question.question),
-        question.detail ? (0, import_react8.createElement)("div", { className: "bt-q-detail" }, question.detail) : null,
+        detail,
+        more,
         raised && multi ? (0, import_react8.createElement)("div", { className: "bt-q-detail" }, t("Choose all that apply")) : null
       ),
       (0, import_react8.createElement)("button", { type: "button", className: "bt-q-x", "aria-label": t("Dismiss question"), title: t("Dismiss"), onClick: onDismiss, disabled: busy }, (0, import_react8.createElement)(CloseIcon))
@@ -10255,7 +10277,7 @@ async function replyAndDismiss({ item, said, hidden = {}, at = Date.now(), onSen
     return { ok: false, error, hidden };
   }
 }
-function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, onSend, onApprove, onApproval, onIgnore, onError }) {
+function NeedsYou({ items: all_items, health, stats, onOpen, onOpenCard, onAnswer, onSend, onApprove, onApproval, onIgnore, onError }) {
   const items = Array.isArray(all_items) ? all_items : [];
   const [open, setOpen] = (0, import_react21.useState)({});
   const [all, setAll] = (0, import_react21.useState)(false);
@@ -10410,6 +10432,20 @@ function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, onSend, o
                 title: [item.bot, item.proposed === true && item.to !== void 0 ? `→ ${item.to}` : void 0, lineOf(item)].filter(Boolean).join(" · "),
                 onClick: () => {
                   if (item.botId !== void 0) onOpen?.(item.botId);
+                },
+                // A double-click goes one step further than a click: it opens the
+                // conversation and brings the card itself into view, unfolded.
+                onDoubleClick: (event) => {
+                  event.stopPropagation();
+                  onOpenCard?.(item);
+                },
+                // The row is a button, so Enter would click it; the keyboard goes the
+                // same way as a double-click instead.
+                onKeyDown: (event) => {
+                  if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+                  if (event.nativeEvent?.isComposing) return;
+                  event.preventDefault();
+                  onOpenCard?.(item);
                 }
               },
               (0, import_react21.createElement)("span", { className: "bt-needs-mark", "aria-hidden": true }),
@@ -11067,6 +11103,8 @@ function TeamSidebar(props) {
       health: roster.workHealth,
       stats: roster.workStats,
       onOpen: (id) => actions.openSession(id),
+      // A double-click opens the conversation and brings the card itself up.
+      onOpenCard: (item) => actions.openNeedsItem?.(item),
       onAnswer: (sessionId, questionId, answer) => {
         void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer)).catch((error) => actions.reportError?.(error, "answer-question"));
       },
@@ -21780,6 +21818,68 @@ function noticeApprovals({ work, roster, shownSession, openSession, since = Date
   return work.subscribe(notify);
 }
 
+// src/client/card-focus.js
+var CARD_FLASH = "bt-card-flash";
+var CARD_FLASH_MS = 1500;
+var attr = (value) => String(value ?? "").replace(/["\\]/g, "\\$&");
+function cardTargetOf(item) {
+  if (item.kind === "answer") {
+    const id = String(item.questionId ?? "");
+    return { selector: `[data-question-id="${attr(id)}"]`, key: `question:${id}`, expand: true };
+  }
+  if (item.kind === "approval") return { selector: "[data-approval-key]", key: item.key ?? "approval", expand: true };
+  return { selector: "[data-chat-flow] > [data-chat-flow-key]", key: item.work ?? item.key ?? item.kind, expand: false, last: true };
+}
+var cardFocus = createSource(null);
+function focusCard(item, at = Date.now()) {
+  const target = cardTargetOf(item);
+  const request = {
+    ...target,
+    sessionId: item.sessionId ?? item.botId,
+    token: `${at}:${Math.random().toString(36).slice(2)}`,
+    at
+  };
+  cardFocus.set(request);
+  return request;
+}
+function findCardTarget(target, root = globalThis.document) {
+  if (root === void 0 || target?.selector === void 0) return void 0;
+  const matches = [...root.querySelectorAll(target.selector)].filter((element) => element.hidden !== true && element.getAttribute("aria-hidden") !== "true");
+  return target.last === true ? matches.at(-1) : matches[0];
+}
+function revealCard(element, { flashMs = CARD_FLASH_MS, flash = true, expand = true } = {}) {
+  if (element === void 0) return { expanded: false };
+  let expanded = false;
+  if (expand) {
+    for (const toggle of element.querySelectorAll('[data-card-toggle][aria-expanded="false"]')) {
+      toggle.scrollIntoView?.({ block: "nearest" });
+      toggle.click?.();
+      expanded = true;
+    }
+    for (const node of element.querySelectorAll("[data-card-collapsed]")) {
+      if (node.getAttribute("data-card-collapsed") === "false") continue;
+      node.setAttribute("data-card-collapsed", "false");
+      node.scrollIntoView?.({ block: "nearest" });
+      expanded = true;
+    }
+    element.setAttribute("data-card-expanded", "true");
+    expanded = true;
+  }
+  element.scrollIntoView?.({ block: "center", behavior: "smooth" });
+  if (flash) {
+    element.classList.remove(CARD_FLASH);
+    void element.offsetWidth;
+    element.classList.add(CARD_FLASH);
+    if (flashMs > 0) setTimeout(() => element.classList.remove(CARD_FLASH), flashMs);
+  }
+  return { expanded };
+}
+function jumpToCard(target, root = globalThis.document, options = {}) {
+  const element = findCardTarget(target, root);
+  if (element === void 0) return void 0;
+  return { element, ...revealCard(element, { expand: target.expand !== false, ...options }) };
+}
+
 // src/client/open-listed.js
 function listedOpener({ list, open, refresh, current }) {
   let drop = () => {
@@ -22222,6 +22322,13 @@ function apply(ctx) {
       const target = partFor(id);
       show2(target);
     },
+    // The row a "needs you" card points at: open its conversation and ask it to bring
+    // the card into view once the conversation has drawn it.
+    openNeedsItem: (item) => {
+      const target = item.sessionId ?? item.botId;
+      if (target !== void 0) actions.openSession(target);
+      return focusCard(item);
+    },
     // The conversation replacements withdraw for a plain Session; set the surface
     // before the navigation so the Bot skin never flashes.
     openAgentSession: (sessionId) => {
@@ -22473,6 +22580,38 @@ function apply(ctx) {
     shownSession: () => Object.values(ctx.sessions.list.getSnapshot().byId ?? {}).find((session) => (session?.retainedBy?.mainView ?? 0) > 0)?.id,
     openSession: (id) => actions.openSession(id)
   }), "ds-bot: approval notifications");
+  ctx.effect(() => {
+    let token;
+    let timer;
+    const stop = () => {
+      if (timer !== void 0) clearInterval(timer);
+      timer = void 0;
+    };
+    const run2 = () => {
+      const request = cardFocus.getSnapshot();
+      if (request === null || request.token === token) return;
+      token = request.token;
+      stop();
+      let tries = 0;
+      const attempt = () => {
+        const view = mainView();
+        const wanted = request.sessionId === void 0 ? void 0 : partFor(request.sessionId);
+        if (wanted !== void 0 && view !== wanted) {
+          if (++tries > 60) stop();
+          return;
+        }
+        if (jumpToCard(request) !== void 0 || ++tries > 60) stop();
+      };
+      timer = setInterval(attempt, 60);
+      attempt();
+    };
+    const off = cardFocus.subscribe(run2);
+    run2();
+    return () => {
+      off();
+      stop();
+    };
+  }, "ds-bot: bring up the card a needs-you row points at");
   const assistantFace = (sessionId) => {
     const binding = ctx.sessions.binding(sessionId);
     if (binding === void 0) throw new Error(`ds-bot: unknown session "${sessionId}"`);

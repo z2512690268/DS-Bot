@@ -217,7 +217,7 @@ export async function replyAndDismiss({ item, said, hidden = {}, at = Date.now()
   }
 }
 
-export function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, onSend, onApprove, onApproval, onIgnore, onError }) {
+export function NeedsYou({ items: all_items, health, stats, onOpen, onOpenCard, onAnswer, onSend, onApprove, onApproval, onIgnore, onError }) {
   const items = Array.isArray(all_items) ? all_items : []
   const [open, setOpen] = useState({}) // per item: is its answer field shown
   const [all, setAll] = useState(false) // every answer field at once
@@ -358,6 +358,17 @@ export function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, on
               'data-kind': item.kind,
               title: [item.bot, item.proposed === true && item.to !== undefined ? `→ ${item.to}` : undefined, lineOf(item)].filter(Boolean).join(' · '),
               onClick: () => { if (item.botId !== undefined) onOpen?.(item.botId) },
+              // A double-click goes one step further than a click: it opens the
+              // conversation and brings the card itself into view, unfolded.
+              onDoubleClick: (event) => { event.stopPropagation(); onOpenCard?.(item) },
+              // The row is a button, so Enter would click it; the keyboard goes the
+              // same way as a double-click instead.
+              onKeyDown: (event) => {
+                if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return
+                if (event.nativeEvent?.isComposing) return
+                event.preventDefault()
+                onOpenCard?.(item)
+              },
             },
               h('span', { className: 'bt-needs-mark', 'aria-hidden': true }),
               h('span', { className: 'bt-needs-kind' }, kindOf(item.kind)),

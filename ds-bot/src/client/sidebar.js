@@ -587,6 +587,8 @@ export function TeamSidebar(props) {
       health: roster.workHealth,
       stats: roster.workStats,
       onOpen: id => actions.openSession(id),
+      // A double-click opens the conversation and brings the card itself up.
+      onOpenCard: item => actions.openNeedsItem?.(item),
       onAnswer: (sessionId, questionId, answer) => {
         void Promise.resolve(actions.answerQuestion(sessionId, questionId, answer))
           .catch(error => actions.reportError?.(error, 'answer-question'))

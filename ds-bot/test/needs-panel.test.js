@@ -360,3 +360,37 @@ test('the batch ignore clears works only, never an approval', () => {
   assert.ok(byText(tree, 'Ignore 3'), 'the three works are cleared together')
   assert.equal(byText(tree, 'Ignore 4'), undefined, 'the approval is not a work to ignore')
 })
+
+test('a single click opens the chat; a double-click or Enter opens the card', () => {
+  const opened = []
+  const focused = []
+  const ui = mount({
+    items: items(),
+    onOpen: id => opened.push(id),
+    onOpenCard: item => focused.push([item.kind, item.key]),
+    onAnswer() {},
+    onSend() {},
+    onApprove() {},
+    onApproval() {},
+    onIgnore: () => Promise.resolve(),
+    onError() {},
+  })
+  const row = ui.rows().find(node => node.props['data-kind'] === 'blocked')
+  row.props.onClick()
+  assert.deepEqual(opened, ['b'])
+  assert.deepEqual(focused, [], 'a single click does not move to the card')
+  row.props.onDoubleClick({ stopPropagation() {} })
+  assert.deepEqual(focused, [['blocked', 'blocked:w1']])
+  const event = { key: 'Enter', preventDefault() { this.prevented = true }, nativeEvent: {} }
+  row.props.onKeyDown(event)
+  assert.equal(event.prevented, true)
+  assert.deepEqual(focused, [['blocked', 'blocked:w1'], ['blocked', 'blocked:w1']])
+  // Space and a modified Enter stay with the button.
+  row.props.onKeyDown({ key: ' ', preventDefault() {}, nativeEvent: {} })
+  row.props.onKeyDown({ key: 'Enter', shiftKey: true, preventDefault() {}, nativeEvent: {} })
+  assert.equal(focused.length, 2)
+  // A question row points at its question id, not at a work.
+  const answer = ui.rows().find(node => node.props['data-kind'] === 'answer')
+  answer.props.onKeyDown({ key: 'Enter', preventDefault() {}, nativeEvent: {} })
+  assert.deepEqual(focused.at(-1), ['answer', 'answer:q1'])
+})

@@ -563,3 +563,23 @@ test('answered handoff replies route to their settled row in history and live tr
     assert.equal(AnsweredReply({ node }).type, AnsweredCell)
   }
 })
+
+test('a long question detail folds to three lines and opens from its own toggle', () => {
+  const { actions } = lease()
+  const long = { ...question, id: 'long-question', allowCustom: false, detail: 'A long explanation. '.repeat(20) }
+  const pending = mount(PendingQuestion, { actions, sessionId: 'chief', question: long, inline: false })
+  const view = mount(childOf(pending.render()).type, childOf(pending.render()).props)
+  let form = view.render()
+  assert.equal(find(form, node => node.props?.['data-question-id'] !== undefined).props['data-question-id'], 'long-question')
+  assert.equal(find(form, node => node.props?.className === 'bt-q-detail').props['data-card-collapsed'], 'true')
+  const toggle = find(form, node => node.props?.['data-card-toggle'] !== undefined)
+  assert.equal(toggle.props['aria-expanded'], false)
+  toggle.props.onClick({ stopPropagation() {} })
+  form = view.render()
+  assert.equal(find(form, node => node.props?.className === 'bt-q-detail').props['data-card-collapsed'], 'false')
+  assert.equal(find(form, node => node.props?.['data-card-toggle'] !== undefined).props['aria-expanded'], true)
+  // A short detail has no fold at all.
+  const short = mount(PendingQuestion, { actions, sessionId: 'chief', question: { ...question, detail: 'Short.' }, inline: false })
+  const shortView = mount(childOf(short.render()).type, childOf(short.render()).props)
+  assert.equal(find(shortView.render(), node => node.props?.['data-card-toggle'] !== undefined), undefined)
+})
