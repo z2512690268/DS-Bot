@@ -7996,19 +7996,14 @@ var SECRET_CSS = `
 `;
 
 // src/client/turn-reasoning.js
-function turnReasoning(steps, current) {
-  const members = steps.length ? steps : [current];
-  const text = members.map(stepReasoning).filter(Boolean).join("\n\n");
-  if (text === "") return "";
-  const closing = members.at(-1);
-  const same = closing === void 0 || closing === current || closing.step === current.step;
-  return same ? text : "";
+function stepReasoning(step) {
+  if (step?.blocks === void 0) return "";
+  return step.blocks.filter((block) => block.kind === "reasoning").map((block) => visibleReasoning(block.text)).join("\n").trim();
 }
 function opensReply(steps, current, withReasoning = true) {
   const members = steps.length ? steps : [current];
-  const closing = members.at(-1);
-  const reasoner = withReasoning && closing !== void 0 && members.some((step) => stepReasoning(step) !== "") ? closing : void 0;
-  return members.find((step) => texts(step).length > 0 || step === reasoner)?.step === current.step;
+  const opener = members.find((step) => texts(step).length > 0 || withReasoning && stepReasoning(step) !== "");
+  return opener?.step === current.step;
 }
 var thinkingStep = (steps) => steps.find(thinkingLive);
 var thinkingLive = (step) => step.status === "running" && texts(step).length === 0 && step.blocks.some((block) => block.kind === "reasoning");
@@ -8020,7 +8015,6 @@ var visibleReasoning = (text) => {
   const end = text.indexOf("</signature>");
   return end === -1 ? "" : text.slice(end + "</signature>".length).replace(/^(\r?\n)+/, "");
 };
-var stepReasoning = (step) => step.blocks.filter((block) => block.kind === "reasoning").map((block) => visibleReasoning(block.text)).join("\n").trim();
 
 // src/shared/group-replies.js
 var RELAY_LIST = /"replies"\s*:\s*\[/;
@@ -8688,25 +8682,6 @@ function MessageTools({ text, name, sessionId, react, actions, open: tapped }) {
     ), document.body) : null
   );
 }
-var thinkingTimes = /* @__PURE__ */ new Map();
-function useThinkingMs({ sessionId, turn, settledSteps, skip }) {
-  const key = `${sessionId}:${turn}:${settledSteps}`;
-  const [ms, setMs] = (0, import_react19.useState)(() => thinkingTimes.get(key));
-  (0, import_react19.useEffect)(() => {
-    if (skip || thinkingTimes.has(key)) {
-      setMs(thinkingTimes.get(key));
-      return void 0;
-    }
-    const control = new AbortController();
-    call("thinking", { sessionId, turn }, control.signal).then((value) => {
-      thinkingTimes.set(key, value?.ms);
-      setMs(value?.ms);
-    }).catch(() => {
-    });
-    return () => control.abort();
-  }, [key, skip]);
-  return ms;
-}
 var rowViews = /* @__PURE__ */ new Map();
 function ThinkingRow({ text, live, at, ms, viewKey }) {
   const box = (0, import_react19.useRef)(null);
@@ -8774,18 +8749,16 @@ function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, use
   const running = data.status === "running";
   const members = steps.length ? steps : [data];
   const shown = thinkingShown(roster.prefs);
-  const closes2 = steps.length === 0 || (steps.at(-1) === data || steps.at(-1)?.step === data.step);
-  const replyOnStep = data.blocks.some((block) => block.kind === "text" && block.text.trim() !== "");
-  const reasoning = !shown || !closes2 ? "" : groupPart === "reasoning" && !running && replyOnStep ? "" : turnReasoning(steps, data);
+  const reasoning = groupPart === "response" || !shown ? "" : stepReasoning(data);
   const thinking = reasoning === "" ? void 0 : thinkingStep(members);
-  const ms = useThinkingMs({ sessionId, turn: data.turn, settledSteps: members.filter((step) => step.status !== "running").length, skip: hidden || reasoning === "" });
+  const ms = reasoning === "" || running || data.finalNode?.time === void 0 || data.time === void 0 ? void 0 : Math.max(1e3, data.finalNode.time - data.time);
   useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts2.length > 0 ? { text: true } : null);
   if (hidden) return (0, import_react19.createElement)(CellEmpty);
   const relays = relayPart(data, groupPart) ? relaysBefore(contexts, steps, data) : [];
   if (texts2.length === 0 && !reasoning && relays.length === 0) return (0, import_react19.createElement)(CellEmpty);
   const selfId = roster.byId[sessionId]?.id ?? sessionId;
   const speaker = layoutOf(roster.prefs) === "flat" ? roster.byId[sessionId] : void 0;
-  const head = speaker !== void 0 && opensReply(steps, data, shown) && (reasoning !== "" || texts2.length > 0 && !(groupPart === "response" && shown && turnReasoning(steps, data) !== ""));
+  const head = speaker !== void 0 && opensReply(steps, data, shown) && (reasoning !== "" || texts2.length > 0);
   return (0, import_react19.createElement)(
     import_react19.Fragment,
     null,
@@ -8806,10 +8779,10 @@ function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, use
     reasoning ? (0, import_react19.createElement)(ThinkingRow, {
       text: reasoning,
       live: thinking !== void 0,
-      viewKey: `${sessionId}:${data.turn}`,
-      // The live clock counts the settled steps too: backing `at` by the settled
-      // time makes one Elapsed show settled + running.
-      ...thinking !== void 0 ? { at: typeof thinking.time === "number" ? thinking.time - (ms ?? 0) : void 0 } : { ms }
+      viewKey: `${sessionId}:${data.turn}:${data.step}`,
+      // The live clock runs from the step's first visible chunk; a settled row shows the
+      // step's own span.
+      ...thinking !== void 0 ? { at: typeof thinking.time === "number" ? thinking.time : void 0 } : { ms }
     }) : null,
     texts2.length ? (0, import_react19.createElement)(Bubbles, { texts: texts2, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi, mentions, fold: FOLD_HUGE, time: speaker === void 0 ? data.time : void 0 }) : null
   );
