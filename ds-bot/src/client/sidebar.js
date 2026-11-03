@@ -2,7 +2,7 @@ import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useR
 import { createPortal } from 'react-dom'
 import { FishLogo } from './dsh-primitives.js'
 import { isMainOf } from './sources.js'
-import { contextLineOf, currentPart, previewOf, relativeShort } from './text.js'
+import { auditLineOf, contextLineOf, currentPart, previewOf, relativeShort } from './text.js'
 import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon, SignOutIcon } from './icons.js'
 import { MAIN_LOOK } from './characters.js'
 import { botState, BotMark, BotAvatar, RoomAvatar } from './mark.js'
@@ -576,6 +576,8 @@ export function TeamSidebar(props) {
         h('button', { type: 'button', className: 'bt-round', 'aria-label': t('New…'), title: t('New…'), onClick: () => actions.openNewChat('new') }, h(PlusIcon)),
         h(AccountLauncher, { seat: false, actions }))
   const contextLine = wideContent ? contextLineOf(roster.contextBudget) : undefined
+  // What the Main Bot did alone today, beside how full its context is.
+  const auditLine = wideContent ? auditLineOf(roster.workAudit) : undefined
   const content = h('div', { className: wideContent ? 'bt-side' : 'bt-side bt-rail', onKeyDown: typeToSearch },
     top,
     wideContent && roster.readOnly ? h('div', { className: 'bt-hint bt-read-only', role: 'status' }, hostText(roster.readOnly)) : null,
@@ -604,6 +606,7 @@ export function TeamSidebar(props) {
       className: `bt-context${roster.contextBudget?.split === true ? ' bt-context-split' : ''}`,
       title: roster.contextBudget?.model === undefined ? undefined : roster.contextBudget.model,
     }, contextLine) : null,
+    wideContent && auditLine !== undefined ? h('div', { className: 'bt-audit', title: t('Last 24 hours') }, auditLine) : null,
     h('div', { ref: listRef, className: 'bt-list', role: 'region', 'aria-label': t('Bot list') },
       wideContent ? (main ? h(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : h('div', { className: 'bt-hint' }, uiNow.bootFailed ? bootHint() : t('Setting up your Main Bot…'))) : null,
       order.map(entry => (entry.kind === 'bot'

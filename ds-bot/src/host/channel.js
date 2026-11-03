@@ -78,6 +78,9 @@ export function install(rt) {
     // How full the Main Bot's context is, from its last call: tokens and, when the model
     // names one, its window and the share spent.
     contextBudget: rt.contextBudgetView?.() ?? null,
+    // The Main Bot's own work in the last day: how many of its turns were done alone and
+    // how many works it handed on. Quiet when it has done nothing either way.
+    workAudit: rt.workAudit?.() ?? null,
     // Key names and who may use them; values never leave the host.
     secrets: rt.secretsView(),
     capabilities: rt.capabilityLibraryView(),

@@ -158,6 +158,7 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-stats{font-size:11px;line-height:1.4;padding:0 6px;color:color-mix(in srgb,var(--bt-ink) 50%,transparent)}
 .bt-context{font-size:11px;line-height:1.4;margin:2px 8px;color:color-mix(in srgb,var(--bt-ink) 46%,transparent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-context-split{color:color-mix(in srgb,var(--bt-danger) 70%,var(--bt-ink))}
+.bt-audit{font-size:11px;line-height:1.4;margin:0 8px 2px;color:color-mix(in srgb,var(--bt-ink) 46%,transparent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-needs-history{list-style:none;margin:0;padding:0 6px 4px 18px;display:flex;flex-direction:column;gap:1px;font-size:11px;color:color-mix(in srgb,var(--bt-ink) 62%,transparent)}
 .bt-needs-history li{display:flex;gap:6px;min-width:0}
 .bt-needs-hist-time{font-variant-numeric:tabular-nums;color:color-mix(in srgb,var(--bt-ink) 42%,transparent);white-space:nowrap}

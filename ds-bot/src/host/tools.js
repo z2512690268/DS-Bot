@@ -224,7 +224,11 @@ export function install(rt) {
       if (room !== undefined) {
         const refusal = groupRefusal(room, sender, target)
         if (refusal !== undefined) refuse(refusal)
-        const send = () => callInGroup(exec, room, sender, target, text.trim())
+        const send = async () => {
+          const out = await callInGroup(exec, room, sender, target, text.trim())
+          rt.noteDispatch?.(exec.agent?.id, { works: 0 })
+          return out
+        }
         return request === undefined ? await send() : answer(await rt.admitRequest(request, send))
       }
       const posted = calledInPosts.get(exec.agent?.id)
@@ -274,6 +278,7 @@ export function install(rt) {
           rt.noteFault?.('delivery')
           throw error
         }
+        rt.noteDispatch?.(exec.agent?.id, { works: !toUser && !joins ? 1 : 0 })
         const sent = toUser
           ? `Delivered to ${target.name}. It will answer the user in its own chat; nothing comes back to you, so point the user to ${target.name}'s chat instead of relaying.`
           : working && steer
@@ -344,6 +349,21 @@ export function install(rt) {
       const result = rt.recordProposal(exec, args)
       if (result.error !== undefined) return result.error
       return `Recorded as a proposal (${result.id}). Nothing runs and no Bot was messaged: the user sees it under "Needs you" and can approve or ignore it. Do not propose it again this turn.`
+    },
+  }))
+
+  rt.teamTools.push(defineTool({
+    name: 'keep_working',
+    description: 'Main Bot only. A turn that keeps working without handing any work on is stopped: call this with one sentence on why this work must be yours, and the turn goes on. The reason stays with the turn in the audit, so doing it yourself is visible rather than forbidden.',
+    parameters: {
+      reason: { type: 'string', required: true, description: 'One sentence on why you must do this work yourself, in the language the user writes.' },
+    },
+    output,
+    async execute(args, exec) {
+      await rt.load()
+      const result = rt.keepWorking?.(exec, args.reason)
+      if (result?.error !== undefined) return result.error
+      return `Recorded: "${result.kept}". This turn will not be stopped for working without handing work on.`
     },
   }))
 
@@ -698,6 +718,7 @@ export function install(rt) {
         if (sub !== undefined) rt.dropWork(sub)
         return `Could not post in "${room.name}": ${failure.message}`
       }
+      rt.noteDispatch?.(exec.agent?.id, { works: sub === undefined ? 0 : 1 })
       if (member && named.length === 0) return `Posted in "${room.name}", where the user and its members read it. Nobody answers it: your post only calls the members you name with @Name.`
       if (named.length > 0) {
         const turn = turnOf(exec)

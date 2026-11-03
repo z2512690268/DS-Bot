@@ -77,6 +77,16 @@ const shortTokens = (tokens) => {
   return String(Math.max(0, Math.round(tokens)))
 }
 
+// The Main Bot's own work in the last day, in one quiet phrase. Nothing when it has
+// neither worked alone nor handed anything on.
+export function auditLineOf(audit) {
+  if (audit === null || audit === undefined) return undefined
+  const alone = Number(audit.alone ?? 0)
+  const works = Number(audit.works ?? 0)
+  if (!(alone > 0) && !(works > 0)) return undefined
+  return t('Last 24h: worked alone {alone} · handed on {works}', { alone, works })
+}
+
 // The Main Bot's context line: how full its window is, in one quiet phrase. A model
 // that cannot name a window shows the absolute size and says the limit is unknown; past
 // the split share, the line asks for the work to be split without interrupting anyone.

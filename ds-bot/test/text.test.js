@@ -87,3 +87,10 @@ test('the context line is quiet, and asks to split the work only past the window
   // An old figure with no way to estimate is not shown as the current one.
   assert.equal(contextLineOf({ stale: true }), 'Context data is out of date')
 })
+
+test('the audit line says how much the Main Bot did alone and handed on', async () => {
+  const { auditLineOf } = await import('../src/client/text.js')
+  assert.equal(auditLineOf(null), undefined)
+  assert.equal(auditLineOf({ turns: 0, alone: 0, works: 0 }), undefined)
+  assert.equal(auditLineOf({ turns: 3, alone: 1, works: 11, kept: 0 }), 'Last 24h: worked alone 1 · handed on 11')
+})

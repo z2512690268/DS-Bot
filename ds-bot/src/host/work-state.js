@@ -47,6 +47,22 @@ export const waitsForUser = state => state.startsWith('person/')
 export const PROACTIVE_MODES = ['off', 'observe', 'auto']
 export const PROACTIVE_MODE = 'observe'
 
+// How much work the Main Bot may do on its own in one turn before it is stopped: `off`
+// stops nothing and records nothing, `audit` only records, `enforce` also stops the turn.
+// The count is the turn's tool calls, and a turn that handed work on is never stopped.
+export const MAIN_GATE_MODES = ['off', 'audit', 'enforce']
+export const MAIN_GATE_MODE = 'enforce'
+export const MAIN_GATE_TOOLS = 10
+
+/** The Main Bot's own-work gate: the constants above, overridden by plugin config. */
+export function mainGateOf(config = {}) {
+  const tools = Number(config.mainWorkGateTools)
+  return {
+    mode: MAIN_GATE_MODES.includes(config.mainWorkGate) ? config.mainWorkGate : MAIN_GATE_MODE,
+    tools: Number.isFinite(tools) && tools > 0 ? Math.floor(tools) : MAIN_GATE_TOOLS,
+  }
+}
+
 /** The team's proactive mode: the constant above, overridden by plugin config. */
 export const proactiveOf = (config = {}) => (PROACTIVE_MODES.includes(config.proactive) ? config.proactive : PROACTIVE_MODE)
 

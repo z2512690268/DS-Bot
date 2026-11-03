@@ -16,6 +16,8 @@ const ZH = {
   'Context ~{tokens} tokens · limit unknown': '上下文约 {tokens} tokens · 上限未知',
   'Context data is out of date': '上下文数据未更新',
   estimated: '估算',
+  'Last 24 hours': '最近 24 小时',
+  'Last 24h: worked alone {alone} · handed on {works}': '近 24 小时：自己动手 {alone} 回合 · 派活 {works} 件',
   'split the work': '该分流',
   'Ready to review': '待验收',
   Blocked: '受阻',
