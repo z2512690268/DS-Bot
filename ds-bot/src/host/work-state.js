@@ -58,19 +58,36 @@ export function approvalTimeoutOf(config = {}) {
   return Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : APPROVAL_TIMEOUT_MS
 }
 
-// How much work the Main Bot may do on its own in one turn before it is stopped: `off`
-// stops nothing and records nothing, `audit` only records, `enforce` also stops the turn.
-// The count is the turn's tool calls, and a turn that handed work on is never stopped.
+// How long a Main Bot turn may keep the user waiting: `off` stops nothing and records
+// nothing, `audit` only records, `enforce` also interrupts. The limits are time, not
+// counts, and a turn that handed work on is held to them just the same:
+//
+// - `softMinutes`: a reflection is steered into the running turn, asking the Main Bot to
+//   hand it on, narrow it, or say why it must continue (once per turn);
+// - `hardMinutes`: the turn is stopped; only `keep_working` lets it go on;
+// - `sameTarget`: the auxiliary repeat limit — the same tool on the same host, path or
+//   service this many times, which usually means it is doing a Bot's debugging.
 export const MAIN_GATE_MODES = ['off', 'audit', 'enforce']
 export const MAIN_GATE_MODE = 'enforce'
-export const MAIN_GATE_TOOLS = 10
+export const MAIN_GATE_SOFT_MINUTES = 3
+export const MAIN_GATE_HARD_MINUTES = 10
+export const MAIN_GATE_SAME_TARGET = 4
 
 /** The Main Bot's own-work gate: the constants above, overridden by plugin config. */
 export function mainGateOf(config = {}) {
-  const tools = Number(config.mainWorkGateTools)
+  const minutes = (value, fallback) => {
+    const count = Number(value)
+    return Number.isFinite(count) && count > 0 ? count : fallback
+  }
+  const calls = (value, fallback) => {
+    const count = Number(value)
+    return Number.isFinite(count) && count > 0 ? Math.floor(count) : fallback
+  }
   return {
     mode: MAIN_GATE_MODES.includes(config.mainWorkGate) ? config.mainWorkGate : MAIN_GATE_MODE,
-    tools: Number.isFinite(tools) && tools > 0 ? Math.floor(tools) : MAIN_GATE_TOOLS,
+    softMinutes: minutes(config.mainTurnSoftMinutes, MAIN_GATE_SOFT_MINUTES),
+    hardMinutes: minutes(config.mainTurnHardMinutes, MAIN_GATE_HARD_MINUTES),
+    sameTarget: calls(config.mainWorkSameTarget, MAIN_GATE_SAME_TARGET),
   }
 }
 

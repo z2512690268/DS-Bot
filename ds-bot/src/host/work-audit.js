@@ -1,58 +1,189 @@
-// The Main Bot's own work: what each of its turns did alone, and stopping a turn that
-// keeps working without handing anything on.
+// The Main Bot's own work: what each of its turns did alone, and interrupting a turn
+// that keeps working instead of handing work on.
 //
 // The team exists so that the Main Bot stays free to answer the user. A Main Bot can
 // still slip into doing everything itself — real work, no hand-off — and nothing in
-// the host used to notice. Each of its turns is now audited (tool calls, shell calls,
-// file writes, work handed on, how long it took, and any `keep_working` reason), and a
-// turn that crosses the tool threshold without handing work on is stopped with a
-// message that says what to do instead.
+// the host used to notice. Each of its turns is audited (tool calls, shell calls, file
+// writes, work handed on, how long it took, and any `keep_working` reason). A turn that
+// runs too long is interrupted: a reflection at the soft line, a stop at the hard line.
+// A third, ancillary limit stops a turn that repeats one tool on the same host, path or
+// service: that usually means it is doing a Bot's work for it. Handing work on does not
+// exempt a turn from any of them; `keep_working` is the explicit way out, and it is
+// recorded.
+//
+// Time is measured from the turn's start on a monotonic clock and is forgotten when the
+// turn ends or is stopped, so no turn inherits another's minutes.
 import { mainGateOf } from './work-state.js'
 
 // The mark a stopped turn carries in its end reason.
 export const WORK_GATE = 'ds-bot/work-gate'
 const AUDIT_MAX = 500
 const DAY_MS = 24 * 60 * 60_000
+const SWEEP_MS = 10_000
+const MINUTE_MS = 60_000
 const SHELL_TOOLS = new Set(['bash', 'pwsh', 'bash-persistent', 'pwsh-persistent'])
 const WRITE_TOOLS = new Set(['write', 'edit'])
+const DISPATCH_TOOLS = new Set(['message_bot', 'post_to_group', 'keep_working'])
+
+const textOf = value => String(value ?? '').trim()
+const stripQuotes = value => String(value ?? '').replace(/^['"]|['"]$/g, '')
+const hostOf = (value) => {
+  try { return new URL(String(value)).host } catch { return undefined }
+}
+
+// The options whose value is the next word, for `ssh` and `scp`.
+const OPTION_ARG = new Set(['-p', '-i', '-o', '-l', '-L', '-R', '-D', '-J', '-F', '-c', '-m', '-O', '-Q', '-S', '-W', '-w', '-b', '-E', '-e', '-I', '-P'])
+
+function sshHost(rest) {
+  const tokens = rest.trim().split(/\s+/).filter(Boolean)
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = stripQuotes(tokens[index])
+    if (token.startsWith('-')) {
+      if (OPTION_ARG.has(token)) index += 1
+      continue
+    }
+    const at = token.lastIndexOf('@')
+    const host = (at === -1 ? token : token.slice(at + 1)).split(':')[0]
+    if (host !== '') return host
+  }
+  return undefined
+}
+
+function scpHost(rest) {
+  const tokens = rest.trim().split(/\s+/).filter(Boolean).map(stripQuotes)
+  const remote = tokens.find(token => !token.startsWith('-') && (token.includes(':') || token.includes('@')))
+  const chosen = remote ?? [...tokens].reverse().find(token => !token.startsWith('-'))
+  if (chosen === undefined) return undefined
+  const at = chosen.lastIndexOf('@')
+  return (at === -1 ? chosen : chosen.slice(at + 1)).split(':')[0] || undefined
+}
+
+function shellTargetOf(command) {
+  const ssh = /\bssh\s+([^\n]*)/i.exec(command)
+  if (ssh !== null) {
+    const host = sshHost(ssh[1])
+    if (host !== undefined) return `host:${host}`
+  }
+  const scp = /\b(?:scp|sftp)\s+([^\n]*)/i.exec(command)
+  if (scp !== null) {
+    const host = scpHost(scp[1])
+    if (host !== undefined) return `host:${host}`
+  }
+  const url = /https?:\/\/[^\s'"`]+/i.exec(command)
+  if (url !== null) {
+    const host = hostOf(url[0])
+    if (host !== undefined) return `url:${host}`
+  }
+  const unit = /\bsystemctl\s+(?:restart|start|stop|reload|status|enable|disable)\s+([\w@.-]+)/i.exec(command)
+  if (unit !== null) return `service:${unit[1]}`
+  const service = /\bservice\s+([\w@.-]+)\s+(?:restart|start|stop|status|reload)/i.exec(command)
+  if (service !== null) return `service:${service[1]}`
+  const docker = /\bdocker\s+(?:restart|start|stop|rm|exec)\s+(?:-[^\s]+\s+)*([\w@.-]+)/i.exec(command)
+  if (docker !== null) return `service:${docker[1]}`
+  const path = /(?:^|[\s'"=:(])(\/(?:[^\s'"`;|&)]+))/i.exec(command)
+  if (path !== null) return `path:${path[1]}`
+  return undefined
+}
+
+// What a call is about, for the repeat limit: the host an ssh/scp call reaches, the
+// service it restarts, the path it reads or writes, or the URL host it fetches. A call
+// with no such subject is not counted; a hand-off is never a subject.
+export function toolTargetOf(name, args = {}) {
+  const tool = String(name ?? '')
+  if (tool === '' || DISPATCH_TOOLS.has(tool)) return undefined
+  const command = textOf(args.command ?? args.cmd ?? args.script)
+  if (command !== '' && SHELL_TOOLS.has(tool)) return shellTargetOf(command)
+  const file = stripQuotes(args.file_path ?? args.path)
+  if (file !== '') return `path:${file}`
+  const url = textOf(args.url)
+  if (url !== '') {
+    const host = hostOf(url)
+    if (host !== undefined) return `url:${host}`
+  }
+  return undefined
+}
+
+function argumentsOf(data) {
+  const raw = data?.arguments ?? data?.args
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw) } catch { return {} }
+  }
+  return raw !== null && typeof raw === 'object' ? raw : {}
+}
 
 export function install(rt) {
   const { state } = rt
   const policy = mainGateOf(rt.config)
   // Per Session: the turn that is running, and what it has done so far.
   const turns = new Map()
+  // Per Session, the stop the next turn answers: `keep_working` there links its reason
+  // back to the gate that stopped the previous turn.
+  const lastStop = new Map()
   const auditLog = () => (state.mainTurns ??= [])
   const save = () => void rt.save().catch(() => {})
   const botOfSession = sessionId => rt.selfOf?.(sessionId)
   const isMainSession = sessionId => rt.isMain?.(botOfSession(sessionId)) === true
+  // The turn clock is monotonic; a test may substitute one through `rt.monotonicNow`.
+  const now = () => {
+    const value = rt.monotonicNow?.()
+    return typeof value === 'number' && Number.isFinite(value) ? value : performance.now()
+  }
+  const minutesSince = (turn, at = now()) => Math.max(0, (at - turn.startedAt) / MINUTE_MS)
+  const minutesOf = value => Math.max(1, Math.floor(value))
 
-  const noteCall = (turn, name) => {
+  const noteCall = (turn, name, args) => {
     turn.tools += 1
     if (SHELL_TOOLS.has(name)) turn.bash += 1
     if (WRITE_TOOLS.has(name)) turn.writes += 1
+    const target = toolTargetOf(name, args)
+    if (target === undefined) {
+      turn.lastCall = undefined
+      return
+    }
+    const key = `${name}:${target}`
+    const count = (turn.targets.get(key) ?? 0) + 1
+    turn.targets.set(key, count)
+    turn.lastCall = { tool: name, target, count }
   }
 
-  // The header the delivery adds already says who stopped it; the text says why and what
-  // the two ways on are.
-  const notice = turn => [
-    `This turn made ${turn.tools} tool calls without handing on any work.`,
-    'Hand the work to the Bot that fits (create one if none does), or call keep_working with the reason you must do it yourself.',
-  ].join('\n')
+  // The text the model reads (and the audit keeps verbatim). The hard line also tells
+  // the model how to answer the user: one sentence of where things stand and the exact
+  // "stopped, waiting for your next instruction" line, with no further explanation.
+  function noticeOf(gate, turn) {
+    if (gate.id === 'soft') {
+      return `This turn has been running ${minutesOf(gate.minutes)} min and has made ${turn.tools} tool calls. Can this work be handed to a Bot? Can it be narrowed? Your next message must hand it on, narrow it, or call keep_working with the reason you must continue.`
+    }
+    if (gate.id === 'hard') {
+      return `This turn passed ${minutesOf(gate.minutes)} min and was stopped. Hand the work to a Bot, or call keep_working with the reason you must continue.\nReply to the user with one sentence on where things stand and then exactly "已停手，等你下一条指令"; do not explain further.`
+    }
+    return `This turn has called ${gate.tool} on ${gate.target} ${gate.count} times. That machine or thing already has a Bot responsible; hand the work back, or call keep_working with the reason you must do it yourself.`
+  }
 
-  // A turn is stopped once: after its tools reach the threshold, with no work handed on
-  // and no keep_working behind it. What it was about to do next is what the stop saves.
-  function gateIfNeeded(sessionId, turn) {
-    if (policy.mode !== 'enforce' || turn.gated || turn.kept !== undefined) return false
-    if (turn.dispatched || turn.works > 0) return false
-    if (turn.tools < policy.tools) return false
-    if (!isMainSession(sessionId)) return false
+  function recordOf(gate, turn, text) {
+    return {
+      gate: gate.id,
+      at: Date.now(),
+      ...(gate.id === 'soft' || gate.id === 'hard' ? { minutes: Math.round(gate.minutes * 10) / 10, limit: gate.id === 'soft' ? policy.softMinutes : policy.hardMinutes } : {}),
+      ...(gate.id === 'same-target' ? { threshold: gate.threshold, tool: gate.tool, target: gate.target, count: gate.count } : {}),
+      tools: turn.tools,
+      dispatched: turn.dispatched,
+      text,
+    }
+  }
+
+  // Stop the turn once. In audit mode the gate is recorded but nothing is delivered or
+  // cancelled; in enforce the notice goes to the Bot's next turn and the turn is cut.
+  function stopTurn(sessionId, turn, gate) {
+    const text = noticeOf(gate, turn)
+    turn.gates.push(recordOf(gate, turn, text))
     turn.gated = true
+    if (policy.mode !== 'enforce') return true
+    turn.stopped = true
+    lastStop.set(sessionId, { gate: gate.id, at: Date.now() })
     const botId = botOfSession(sessionId)
     void (async () => {
       try {
-        // The notice reaches the Bot as its next turn's trigger: it reads why the turn
-        // stopped and what the alternatives are.
-        await rt.deliver({ toId: botId, role: 'gate', text: notice(turn) })
+        await rt.deliver({ toId: botId, role: 'gate', text })
       } catch (error) {
         rt.warn('ds-bot: the work-gate notice to %s was not delivered: %s', botId, error)
       }
@@ -66,13 +197,63 @@ export function install(rt) {
     return true
   }
 
-  function finish(sessionId, turn, at) {
+  // The soft line does not stop the turn: it is steered into the running turn, so the
+  // next model step sees it. It is sent once per turn.
+  function remindSoft(sessionId, turn, gate) {
+    const text = noticeOf(gate, turn)
+    turn.softNotified = true
+    turn.gates.push(recordOf(gate, turn, text))
+    if (policy.mode !== 'enforce') return true
+    const botId = botOfSession(sessionId)
+    void (async () => {
+      if (turns.get(sessionId) !== turn || turn.gated) return
+      try {
+        await rt.deliver({ toId: botId, role: 'gate-soft', text, steer: true })
+      } catch (error) {
+        rt.warn('ds-bot: the time check to %s was not delivered: %s', botId, error)
+      }
+    })()
+    return true
+  }
+
+  function timeGateIfNeeded(sessionId, turn, at = now()) {
+    if (policy.mode === 'off' || turn.gated || turn.kept !== undefined) return false
+    if (!isMainSession(sessionId)) return false
+    const minutes = minutesSince(turn, at)
+    if (minutes >= policy.hardMinutes) return stopTurn(sessionId, turn, { id: 'hard', minutes })
+    if (!turn.softNotified && minutes >= policy.softMinutes) return remindSoft(sessionId, turn, { id: 'soft', minutes })
+    return false
+  }
+
+  // The auxiliary repeat limit: the same tool on the same host, path or service. It is
+  // not about time; it catches "I am debugging this Bot's environment for it".
+  function repeatGateIfNeeded(sessionId, turn) {
+    if (policy.mode === 'off' || turn.gated || turn.kept !== undefined) return false
+    if (!isMainSession(sessionId)) return false
+    const last = turn.lastCall
+    if (last === undefined || last.count < policy.sameTarget) return false
+    return stopTurn(sessionId, turn, { id: 'same-target', threshold: policy.sameTarget, ...last })
+  }
+
+  // The timer half of the time gates: a turn can outlive its last tool result, so the
+  // host itself looks at the clock every few seconds.
+  function sweepWorkGate(at = now()) {
+    let changed = false
+    for (const [sessionId, turn] of turns) {
+      if (policy.mode === 'off' || turn.gated || turn.kept !== undefined) continue
+      if (timeGateIfNeeded(sessionId, turn, at)) changed = true
+    }
+    return changed
+  }
+
+  function finish(sessionId, turn) {
     if (policy.mode === 'off' || !isMainSession(sessionId)) return
-    // A pure answer is not work: only turns that did something are worth a line.
-    if (turn.tools === 0 && turn.works === 0 && turn.kept === undefined) return
+    // A pure answer is not work: only turns that did something (or were checked) are
+    // worth a line.
+    if (turn.tools === 0 && turn.works === 0 && turn.kept === undefined && turn.gates.length === 0) return
     auditLog().push({
-      at: turn.startedAt,
-      ms: Math.max(0, at - turn.startedAt),
+      at: turn.startedAtWall,
+      ms: Math.max(0, now() - turn.startedAt),
       botId: botOfSession(sessionId),
       sessionId,
       tools: turn.tools,
@@ -80,7 +261,9 @@ export function install(rt) {
       writes: turn.writes,
       works: turn.works,
       ...(turn.kept === undefined ? {} : { kept: turn.kept }),
-      ...(turn.gated ? { gated: true } : {}),
+      ...(turn.keptFrom === undefined ? {} : { keptFrom: turn.keptFrom }),
+      ...(turn.stopped ? { gated: true } : {}),
+      ...(turn.gates.length === 0 ? {} : { gates: turn.gates }),
     })
     if (auditLog().length > AUDIT_MAX) auditLog().splice(0, auditLog().length - AUDIT_MAX)
     save()
@@ -100,7 +283,7 @@ export function install(rt) {
   }
 
   // Work this turn handed to another Bot: a request, a post into a group, or a work it
-  // opened for one. A turn that did any of this is never stopped for working alone.
+  // opened for one. It marks the audit; it does not exempt the turn from the time gates.
   function noteDispatch(sessionId, { works = 0 } = {}) {
     const turn = turns.get(sessionId)
     if (turn === undefined) return
@@ -108,8 +291,8 @@ export function install(rt) {
     turn.works += works
   }
 
-  // The explicit way out: the Main Bot says why this work must be its own, and the
-  // reason stays in the audit beside the turn it excused.
+  // The explicit way out: the Main Bot says why this work must be its own, and every
+  // remaining gate in this turn is off; the reason stays in the audit.
   function keepWorking(exec, reason) {
     const sessionId = exec.agent?.id
     if (!isMainSession(sessionId)) return { error: 'keep_working is for the Main Bot: another Bot works on its own by design.' }
@@ -118,6 +301,7 @@ export function install(rt) {
     const why = String(reason ?? '').replace(/\s+/g, ' ').trim()
     if (why === '') return { error: 'Give one sentence on why you must do this work yourself.' }
     turn.kept = why.slice(0, 300)
+    if (turn.resumedFrom !== undefined) turn.keptFrom = turn.resumedFrom.gate
     return { kept: turn.kept }
   }
 
@@ -127,34 +311,44 @@ export function install(rt) {
     const turn = turns.get(sessionId)
     switch (event.type) {
       case 'turn/start': {
+        const resumedFrom = lastStop.get(sessionId)
+        lastStop.delete(sessionId)
         turns.set(sessionId, {
-          startedAt: event.time ?? Date.now(),
+          startedAt: now(),
+          startedAtWall: Date.now(),
           tools: 0,
           bash: 0,
           writes: 0,
           works: 0,
           dispatched: false,
+          targets: new Map(),
+          lastCall: undefined,
+          gates: [],
+          softNotified: false,
           kept: undefined,
+          keptFrom: undefined,
+          resumedFrom,
           gated: false,
+          stopped: false,
         })
         break
       }
       case 'tool/call':
       case 'tool/ptc-dispatch-start': {
         if (turn === undefined) break
-        noteCall(turn, String(event.data?.name ?? ''))
+        noteCall(turn, String(event.data?.name ?? ''), argumentsOf(event.data))
         break
       }
       case 'tool/result':
       case 'tool/ptc-dispatch': {
         if (turn === undefined) break
-        gateIfNeeded(sessionId, turn)
+        if (!repeatGateIfNeeded(sessionId, turn)) timeGateIfNeeded(sessionId, turn)
         break
       }
       case 'turn/end': {
         if (turn === undefined) break
         turns.delete(sessionId)
-        finish(sessionId, turn, event.time ?? Date.now())
+        finish(sessionId, turn)
         break
       }
       default:
@@ -162,5 +356,11 @@ export function install(rt) {
     }
   })
 
-  Object.assign(rt, { noteDispatch, keepWorking, workAudit, workGate: policy })
+  rt.ctx?.effect?.(() => {
+    const timer = setInterval(() => { sweepWorkGate() }, SWEEP_MS)
+    timer.unref?.()
+    return () => clearInterval(timer)
+  }, 'ds-bot: check the Main Bot turn time')
+
+  Object.assign(rt, { noteDispatch, keepWorking, workAudit, workGate: policy, sweepWorkGate })
 }
