@@ -140,14 +140,20 @@ test('writing the user\'s DSH data is rejected by the policy, and the Bot hears 
 test('a rule that cannot decide waits in the inbox, and a Main Bot answers it', async (t) => {
   const { rt, ctx, call } = await bench(t).start()
   rt.openWork('w1', { from: 'a', to: 'b' })
-  rt.live.set('b', { turn: 1, info: { role: 'request', exchangeId: 'w1' } })
-  const pending = ask(ctx, { reason: 'escalate sandbox to danger-full-access: do the thing' })
+  rt.live.set('b', {
+    turn: 1,
+    info: { role: 'request', exchangeId: 'w1' },
+    calls: new Map([['c1', { name: 'bash', args: JSON.stringify({ description: 'do the thing', command: 'some-unknown-command --flag' }) }]]),
+  })
+  const pending = ask(ctx, { callId: 'c1', reason: 'escalate sandbox to danger-full-access: do the thing' })
   const item = rt.needsYou().find(entry => entry.kind === 'approval')
   assert.ok(item, 'the undecided approval is in the inbox')
   assert.equal(item.bot, 'Writer')
   assert.equal(item.summary, 'bash: escalate sandbox to danger-full-access: do the thing')
   assert.match(item.unsure, /no rule covers/)
   assert.match(item.approvals[0].unsure, /no rule covers/)
+  assert.equal(item.approvals[0].detail, 'some-unknown-command --flag', 'the object being escalated is in the card')
+  assert.equal(item.approvals[0].description, 'do the thing')
   assert.equal(item.key, 'approval:b')
   // The main chat answers through the same endpoint as every other card.
   assert.equal((await call('approval-answer', { id: item.approvals[0].id, choice: 'allow', by: 'a' })).ok, true)

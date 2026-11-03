@@ -161,6 +161,7 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-approval{display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:11px}
 .bt-needs-approval-tool{font-family:var(--bt-mono,monospace);font-size:11px;color:color-mix(in srgb,var(--bt-ink) 78%,transparent)}
 .bt-needs-approval-reason{flex:1 1 100%;line-height:1.35;color:color-mix(in srgb,var(--bt-ink) 60%,transparent)}
+.bt-needs-approval-code{flex:1 1 100%;font-family:var(--bt-mono,monospace);font-size:10px;line-height:1.35;color:color-mix(in srgb,var(--bt-ink) 70%,transparent);overflow-wrap:anywhere}
 .bt-needs-unsure{flex:1 1 100%;line-height:1.35;color:color-mix(in srgb,var(--bt-danger) 62%,var(--bt-ink))}
 .bt-needs-health{font-size:11px;line-height:1.4;padding:4px 6px;border-radius:8px;color:color-mix(in srgb,var(--bt-danger) 78%,var(--bt-ink));background:color-mix(in srgb,var(--bt-danger) 10%,transparent)}
 .bt-needs-stats{font-size:11px;line-height:1.4;padding:0 6px;color:color-mix(in srgb,var(--bt-ink) 50%,transparent)}

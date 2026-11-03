@@ -2672,6 +2672,7 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-approval{display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:11px}
 .bt-needs-approval-tool{font-family:var(--bt-mono,monospace);font-size:11px;color:color-mix(in srgb,var(--bt-ink) 78%,transparent)}
 .bt-needs-approval-reason{flex:1 1 100%;line-height:1.35;color:color-mix(in srgb,var(--bt-ink) 60%,transparent)}
+.bt-needs-approval-code{flex:1 1 100%;font-family:var(--bt-mono,monospace);font-size:10px;line-height:1.35;color:color-mix(in srgb,var(--bt-ink) 70%,transparent);overflow-wrap:anywhere}
 .bt-needs-unsure{flex:1 1 100%;line-height:1.35;color:color-mix(in srgb,var(--bt-danger) 62%,var(--bt-ink))}
 .bt-needs-health{font-size:11px;line-height:1.4;padding:4px 6px;border-radius:8px;color:color-mix(in srgb,var(--bt-danger) 78%,var(--bt-ink));background:color-mix(in srgb,var(--bt-danger) 10%,transparent)}
 .bt-needs-stats{font-size:11px;line-height:1.4;padding:0 6px;color:color-mix(in srgb,var(--bt-ink) 50%,transparent)}
@@ -10364,6 +10365,7 @@ function NeedsYou({ items: all_items, health, stats, onOpen, onOpenCard, onAnswe
           "li",
           { key: one2.id, className: "bt-needs-approval" },
           (0, import_react21.createElement)("span", { className: "bt-needs-approval-tool" }, one2.tool || (zh() ? "某个工具" : "a tool")),
+          one2.detail === void 0 ? null : (0, import_react21.createElement)("code", { className: "bt-needs-approval-code" }, one2.detail),
           one2.reason === "" ? null : (0, import_react21.createElement)("span", { className: "bt-needs-approval-reason" }, one2.reason),
           one2.unsure === void 0 ? null : (0, import_react21.createElement)("span", { className: "bt-needs-unsure" }, `${zh() ? "我拿不准" : "Not sure"}: ${one2.unsure}`),
           approvalButtons(one2)
@@ -10374,6 +10376,7 @@ function NeedsYou({ items: all_items, health, stats, onOpen, onOpenCard, onAnswe
     return (0, import_react21.createElement)(
       "div",
       { key: `approval-${index}`, className: "bt-needs-approval-detail" },
+      one.detail === void 0 ? null : (0, import_react21.createElement)("code", { className: "bt-needs-approval-code" }, one.detail),
       one.reason === "" ? null : (0, import_react21.createElement)("span", { className: "bt-needs-approval-reason" }, one.reason),
       (0, import_react21.createElement)("span", { className: "bt-needs-unsure" }, `${zh() ? "我拿不准" : "Not sure"}: ${one.unsure ?? (zh() ? "需要你决定" : "needs your decision")}`)
     );
