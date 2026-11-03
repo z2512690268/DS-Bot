@@ -13,12 +13,12 @@ test('a long tool Turn shows its reasoning once, on the last step, in order', ()
   assert.equal(shown[23], steps.map((_, i) => `Reasoning ${i + 1}`).join('\n\n'))
 })
 
-test('the row sits on the last step with reasoning, next to the reply', () => {
+test('the row rides the step that closes the Turn, next to the reply', () => {
   const steps = [step(1, [{ kind: 'text', text: 'Looking' }, tool]), step(2, [think('B'), tool]), step(3, [think('C'), { kind: 'text', text: 'Done' }])]
   assert.deepEqual(steps.map(current => turnReasoning(steps, current)), ['', '', 'B\n\nC'])
-  // A Turn whose only reasoning step came first keeps the row there.
+  // Reasoning left inside the folded process block still shows once the Turn closes.
   const early = [step(1, [think('B'), tool]), step(2, [tool]), step(3, [{ kind: 'text', text: 'Done' }])]
-  assert.deepEqual(early.map(current => turnReasoning(early, current)), ['B', '', ''])
+  assert.deepEqual(early.map(current => turnReasoning(early, current)), ['', '', 'B'])
 })
 
 test('reasoning still in progress shows while its step thinks', () => {
@@ -62,8 +62,8 @@ test('a reply opens on its first text or on its reasoning row, whichever comes f
   const opener = steps => steps.findIndex(current => opensReply(steps, current))
   // A word before the tools opens the reply, ahead of the reasoning on the last step.
   assert.equal(opener([step(1, [{ kind: 'text', text: 'Looking' }, tool]), step(2, [think('B'), tool]), step(3, [think('C'), { kind: 'text', text: 'Done' }])]), 0)
-  // Reasoning that shows before any text opens it.
-  assert.equal(opener([step(1, [think('B'), tool]), step(2, [tool]), step(3, [{ kind: 'text', text: 'Done' }])]), 0)
+  // The row sits on the closing step, so the reply opens there.
+  assert.equal(opener([step(1, [think('B'), tool]), step(2, [tool]), step(3, [{ kind: 'text', text: 'Done' }])]), 2)
   // Tools alone open nothing; the step that answers does.
   assert.equal(opener([step(1, [tool]), step(2, [tool]), step(3, [{ kind: 'text', text: 'Done' }])]), 2)
   assert.equal(opener([step(1, [tool])]), -1)

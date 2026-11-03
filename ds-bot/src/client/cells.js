@@ -203,7 +203,9 @@ export function ThinkingRow({ text, live, at, ms, viewKey }) {
   const box = useRef(null)
   const view = useRef(rowViews.get(viewKey))
   const atEnd = useRef(view.current?.atEnd ?? true)
-  const [open, setOpen] = useState(view.current?.open ?? false)
+  // A turn still thinking opens the row: the reader watches the reasoning stream instead
+  // of a closed summary, and a later reader of the same turn gets the remembered state.
+  const [open, setOpen] = useState(view.current?.open ?? live === true)
   const [fade, setFade] = useState(undefined)
   const remember = patch => { if (viewKey !== undefined) rowViews.set(viewKey, { ...rowViews.get(viewKey), ...patch }) }
   const measure = () => {
@@ -260,10 +262,17 @@ export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentio
   const running = data.status === 'running'
   const members = steps.length ? steps : [data]
   const shown = thinkingShown(roster.prefs)
-  const reasoning = groupPart === 'response' || !shown ? '' : turnReasoning(steps, data)
+  // The row rides the step that closes the Turn, beside its reply and outside the folded
+  // process block; a step still thinking carries it instead, so the reasoning streams
+  // where the reader is looking. A step with reply text shows it on the reply, not twice.
+  const closes = steps.length === 0 || (steps.at(-1) === data || steps.at(-1)?.step === data.step)
+  const replyOnStep = data.blocks.some(block => block.kind === 'text' && block.text.trim() !== '')
+  const reasoning = !shown || !closes ? ''
+    : groupPart === 'reasoning' && !running && replyOnStep ? ''
+      : turnReasoning(steps, data)
   // A live step of the same Turn keeps the row ticking even when it sits on an
   // earlier step's cell.
-  const thinking = groupPart === 'response' || !shown ? undefined : thinkingStep(members)
+  const thinking = reasoning === '' ? undefined : thinkingStep(members)
   const ms = useThinkingMs({ sessionId, turn: data.turn, settledSteps: members.filter(step => step.status !== 'running').length, skip: hidden || reasoning === '' })
   // A streaming reply stands in for the activity row.
   useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts.length > 0 ? { text: true } : null)

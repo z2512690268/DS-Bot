@@ -7998,12 +7998,16 @@ var SECRET_CSS = `
 // src/client/turn-reasoning.js
 function turnReasoning(steps, current) {
   const members = steps.length ? steps : [current];
-  if (members.findLast((step) => stepReasoning(step) !== "")?.step !== current.step) return "";
-  return members.map(stepReasoning).filter(Boolean).join("\n\n");
+  const text = members.map(stepReasoning).filter(Boolean).join("\n\n");
+  if (text === "") return "";
+  const closing = members.at(-1);
+  const same = closing === void 0 || closing === current || closing.step === current.step;
+  return same ? text : "";
 }
 function opensReply(steps, current, withReasoning = true) {
   const members = steps.length ? steps : [current];
-  const reasoner = withReasoning ? members.findLast((step) => stepReasoning(step) !== "") : void 0;
+  const closing = members.at(-1);
+  const reasoner = withReasoning && closing !== void 0 && members.some((step) => stepReasoning(step) !== "") ? closing : void 0;
   return members.find((step) => texts(step).length > 0 || step === reasoner)?.step === current.step;
 }
 var thinkingStep = (steps) => steps.find(thinkingLive);
@@ -8708,7 +8712,7 @@ function ThinkingRow({ text, live, at, ms, viewKey }) {
   const box = (0, import_react19.useRef)(null);
   const view = (0, import_react19.useRef)(rowViews.get(viewKey));
   const atEnd = (0, import_react19.useRef)(view.current?.atEnd ?? true);
-  const [open, setOpen] = (0, import_react19.useState)(view.current?.open ?? false);
+  const [open, setOpen] = (0, import_react19.useState)(view.current?.open ?? live === true);
   const [fade, setFade] = (0, import_react19.useState)(void 0);
   const remember = (patch) => {
     if (viewKey !== void 0) rowViews.set(viewKey, { ...rowViews.get(viewKey), ...patch });
@@ -8770,8 +8774,10 @@ function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, use
   const running = data.status === "running";
   const members = steps.length ? steps : [data];
   const shown = thinkingShown(roster.prefs);
-  const reasoning = groupPart === "response" || !shown ? "" : turnReasoning(steps, data);
-  const thinking = groupPart === "response" || !shown ? void 0 : thinkingStep(members);
+  const closes2 = steps.length === 0 || (steps.at(-1) === data || steps.at(-1)?.step === data.step);
+  const replyOnStep = data.blocks.some((block) => block.kind === "text" && block.text.trim() !== "");
+  const reasoning = !shown || !closes2 ? "" : groupPart === "reasoning" && !running && replyOnStep ? "" : turnReasoning(steps, data);
+  const thinking = reasoning === "" ? void 0 : thinkingStep(members);
   const ms = useThinkingMs({ sessionId, turn: data.turn, settledSteps: members.filter((step) => step.status !== "running").length, skip: hidden || reasoning === "" });
   useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts2.length > 0 ? { text: true } : null);
   if (hidden) return (0, import_react19.createElement)(CellEmpty);

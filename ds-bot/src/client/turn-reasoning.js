@@ -1,18 +1,23 @@
-// Settled and live reasoning of every loaded step in a Turn, shown once on the last
-// step that has reasoning: only steps with reasoning get a reasoning part to render
-// it. Sitting under the Turn's tool lines keeps the row directly above the reply.
+// A Turn's reasoning is drawn once, where a reader can see it: on the step that closes
+// the Turn, whose reply the chat draws outside the folded process block. The reasoning
+// steps themselves sit inside that fold, so a row left there disappears with it once
+// the Turn is done.
 export function turnReasoning(steps, current) {
   const members = steps.length ? steps : [current]
-  if (members.findLast(step => stepReasoning(step) !== '')?.step !== current.step) return ''
-  return members.map(stepReasoning).filter(Boolean).join('\n\n')
+  const text = members.map(stepReasoning).filter(Boolean).join('\n\n')
+  if (text === '') return ''
+  const closing = members.at(-1)
+  const same = closing === undefined || closing === current || closing.step === current.step
+  return same ? text : ''
 }
 
 // Whether `current` opens the Turn's reply in the chat: the first step with reply text,
-// or — while the reasoning shows — the one that shows the Turn's reasoning, whichever
+// or — while the reasoning shows — the step that carries the Turn's reasoning, whichever
 // comes first.
 export function opensReply(steps, current, withReasoning = true) {
   const members = steps.length ? steps : [current]
-  const reasoner = withReasoning ? members.findLast(step => stepReasoning(step) !== '') : undefined
+  const closing = members.at(-1)
+  const reasoner = withReasoning && closing !== undefined && members.some(step => stepReasoning(step) !== '') ? closing : undefined
   return members.find(step => texts(step).length > 0 || step === reasoner)?.step === current.step
 }
 
