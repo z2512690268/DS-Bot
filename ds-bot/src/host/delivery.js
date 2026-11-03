@@ -32,6 +32,10 @@ export function install(rt) {
     // The lease of a work this Bot waits for ran out: it is news to act on, not a
     // request, so the turn that reads it owes no answer.
     if (role === 'stalled') return `[A work you handed on to ${fromName} stalled]`
+    // A Bot held up by an approval: the Bot that handed the work on hears it is blocked,
+    // and the Bot that was refused hears what to do next.
+    if (role === 'approval') return `[${fromName} is blocked on an approval]`
+    if (role === 'approval-rejected') return '[Your approval request was rejected]'
     // The host stopped the turn itself: it says so, and what to do instead.
     if (role === 'gate') return '[DS Bot stopped this turn]'
     if (role === 'room') return `[Group chat "${roomName}" · ${note}]`

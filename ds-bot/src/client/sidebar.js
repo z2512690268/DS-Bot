@@ -597,6 +597,9 @@ export function TeamSidebar(props) {
         void Promise.resolve(actions.approveProposal(id))
           .catch(error => actions.reportError?.(error, 'approve-proposal'))
       },
+      // An approval answered here is the Main Bot deciding on the user's behalf: the
+      // host writes that in the audit, so the client names it.
+      onApproval: (id, choice) => Promise.resolve(actions.answerApproval(id, choice, roster.mainBotId ?? undefined)),
       onIgnore: keys => Promise.resolve(actions.dismissNeeds(keys)),
       onError: (error, tag = 'needs') => actions.reportError?.(error, tag),
     }) : null,

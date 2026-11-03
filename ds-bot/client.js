@@ -1758,7 +1758,7 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     answerView: (sessionId, viewId, action, values) => after(call2("view-reply", { sessionId: partFor(sessionId), viewId, action, values })),
     dismissView: (sessionId) => after(call2("dismiss-view", { sessionId: partFor(sessionId) })),
     deleteBtw: (sessionId, cardId) => after(call2("btw-delete", { sessionId, cardId })),
-    answerApproval: (id, choice) => after(call2("approval-answer", { id, choice })),
+    answerApproval: (id, choice, by) => after(call2("approval-answer", { id, choice, ...by ? { by } : {} })),
     stopMemberWork: (roomId, botId) => after(call2("stop-member-work", { roomId, botId })),
     stopRoomWork: (roomId) => after(call2("stop-room-work", { roomId })),
     goalDraft: (roomId, text) => after(call2("goal-draft", { roomId, text })),
@@ -2665,6 +2665,14 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-ignore{color:color-mix(in srgb,var(--bt-ink) 40%,transparent)}
 .bt-needs-scroll{max-height:38vh;overflow-y:auto;overscroll-behavior:contain}
 .bt-needs-row[data-kind="proposed"] .bt-needs-mark{background:var(--bt-accent);opacity:.55}
+.bt-needs-row[data-kind="approval"] .bt-needs-mark{background:var(--bt-danger)}
+.bt-needs-reject{color:color-mix(in srgb,var(--bt-danger) 78%,var(--bt-ink));border-color:color-mix(in srgb,var(--bt-danger) 35%,transparent)}
+.bt-needs-approval-detail{display:flex;flex-direction:column;gap:1px;padding:0 6px 5px 18px;font-size:11px;color:color-mix(in srgb,var(--bt-ink) 55%,transparent)}
+.bt-needs-approvals{list-style:none;margin:0;padding:0 6px 5px 18px;display:flex;flex-direction:column;gap:5px}
+.bt-needs-approval{display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:11px}
+.bt-needs-approval-tool{font-family:var(--bt-mono,monospace);font-size:11px;color:color-mix(in srgb,var(--bt-ink) 78%,transparent)}
+.bt-needs-approval-reason{flex:1 1 100%;line-height:1.35;color:color-mix(in srgb,var(--bt-ink) 60%,transparent)}
+.bt-needs-unsure{flex:1 1 100%;line-height:1.35;color:color-mix(in srgb,var(--bt-danger) 62%,var(--bt-ink))}
 .bt-needs-health{font-size:11px;line-height:1.4;padding:4px 6px;border-radius:8px;color:color-mix(in srgb,var(--bt-danger) 78%,var(--bt-ink));background:color-mix(in srgb,var(--bt-danger) 10%,transparent)}
 .bt-needs-stats{font-size:11px;line-height:1.4;padding:0 6px;color:color-mix(in srgb,var(--bt-ink) 50%,transparent)}
 .bt-context{font-size:11px;line-height:1.4;margin:2px 8px;color:color-mix(in srgb,var(--bt-ink) 46%,transparent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -10053,13 +10061,22 @@ var kindOf = (kind) => {
   if (kind === "answer") return zh() ? "等你回答" : "Waits for your answer";
   if (kind === "blocked") return zh() ? "受阻" : "Blocked";
   if (kind === "proposed") return zh() ? "我本来会做" : "I would have done";
+  if (kind === "approval") return zh() ? "等你批准" : "Waiting for approval";
   return zh() ? "待验收" : "Ready to review";
 };
 var lineOf = (item) => {
   if (item.kind === "answer") return item.question ?? "";
+  if (item.kind === "approval" && (item.approvals?.length ?? 0) > 1) {
+    return zh() ? `${item.summary} · 还有 ${item.approvals.length - 1} 个` : `${item.summary} · ${item.approvals.length - 1} more`;
+  }
   return item.summary ?? item.detail ?? "";
 };
-var itemKey = (item) => item.key ?? (item.kind === "answer" ? `answer:${item.questionId}` : `${item.kind}:${item.work}`);
+var itemKey = (item) => {
+  if (item.key !== void 0) return item.key;
+  if (item.kind === "answer") return `answer:${item.questionId}`;
+  if (item.kind === "approval") return `approval:${item.sessionId}`;
+  return `${item.kind}:${item.work}`;
+};
 function healthLineOf(health) {
   if (health === null || health === void 0) return void 0;
   const parts = [];
@@ -10238,19 +10255,32 @@ async function replyAndDismiss({ item, said, hidden = {}, at = Date.now(), onSen
     return { ok: false, error, hidden };
   }
 }
-function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, onSend, onApprove, onIgnore, onError }) {
+function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, onSend, onApprove, onApproval, onIgnore, onError }) {
   const items = Array.isArray(all_items) ? all_items : [];
   const [open, setOpen] = (0, import_react21.useState)({});
   const [all, setAll] = (0, import_react21.useState)(false);
   const [timeline, setTimeline] = (0, import_react21.useState)({});
   const [hidden, setHidden] = (0, import_react21.useState)({});
+  const [answered, setAnswered] = (0, import_react21.useState)({});
+  const [openApprovals, setOpenApprovals] = (0, import_react21.useState)({});
   const trouble = healthLineOf(health);
   const summary = statsLineOf(stats);
-  const rows2 = visibleItems(items, hidden);
+  const rows2 = visibleItems(items, hidden).map((item) => item.kind === "approval" ? { ...item, approvals: (Array.isArray(item.approvals) ? item.approvals : []).filter((one) => answered[one.id] === void 0) } : item).filter((item) => item.kind !== "approval" || item.approvals.length > 0);
   if (rows2.length === 0 && trouble === void 0 && summary === void 0) return null;
   const answers = rows2.filter((item) => item.kind === "answer");
-  const works = rows2.filter((item) => item.kind !== "answer");
+  const works = rows2.filter((item) => item.kind !== "answer" && item.kind !== "approval");
   const toggle = (key) => setOpen((prev) => ({ ...prev, [key]: !prev[key] }));
+  const answerApproval = (approval, choice) => {
+    setAnswered((prev) => ({ ...prev, [approval.id]: choice }));
+    void Promise.resolve(onApproval?.(approval.id, choice)).catch((error) => {
+      setAnswered((prev) => {
+        const next = { ...prev };
+        delete next[approval.id];
+        return next;
+      });
+      onError?.(error, "approval");
+    });
+  };
   const sendReply = (item, said) => {
     const key = itemKey(item);
     const at = Date.now();
@@ -10280,6 +10310,51 @@ function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, onSend, o
       });
       onError?.(error, "needs-dismiss");
     });
+  };
+  const approvalButtons = (approval) => [
+    (0, import_react21.createElement)("button", {
+      key: "allow",
+      type: "button",
+      className: "bt-needs-answer",
+      onClick: (event) => {
+        event.stopPropagation();
+        answerApproval(approval, "allow");
+      }
+    }, zh() ? "允许一次" : "Allow once"),
+    (0, import_react21.createElement)("button", {
+      key: "reject",
+      type: "button",
+      className: "bt-needs-tool bt-needs-reject",
+      onClick: (event) => {
+        event.stopPropagation();
+        answerApproval(approval, "reject");
+      }
+    }, zh() ? "拒绝" : "Reject")
+  ];
+  const approvalDetail = (item, index) => {
+    const approvals = item.approvals;
+    if (approvals.length > 1) {
+      if (openApprovals[itemKey(item)] !== true) return null;
+      return (0, import_react21.createElement)(
+        "ul",
+        { key: `approvals-${index}`, className: "bt-needs-approvals", "aria-label": zh() ? "等你逐条批准" : "Approvals waiting for you" },
+        approvals.map((one2) => (0, import_react21.createElement)(
+          "li",
+          { key: one2.id, className: "bt-needs-approval" },
+          (0, import_react21.createElement)("span", { className: "bt-needs-approval-tool" }, one2.tool || (zh() ? "某个工具" : "a tool")),
+          one2.reason === "" ? null : (0, import_react21.createElement)("span", { className: "bt-needs-approval-reason" }, one2.reason),
+          one2.unsure === void 0 ? null : (0, import_react21.createElement)("span", { className: "bt-needs-unsure" }, `${zh() ? "我拿不准" : "Not sure"}: ${one2.unsure}`),
+          approvalButtons(one2)
+        ))
+      );
+    }
+    const one = approvals[0];
+    return (0, import_react21.createElement)(
+      "div",
+      { key: `approval-${index}`, className: "bt-needs-approval-detail" },
+      one.reason === "" ? null : (0, import_react21.createElement)("span", { className: "bt-needs-approval-reason" }, one.reason),
+      (0, import_react21.createElement)("span", { className: "bt-needs-unsure" }, `${zh() ? "我拿不准" : "Not sure"}: ${one.unsure ?? (zh() ? "需要你决定" : "needs your decision")}`)
+    );
   };
   const tools = [];
   if (answers.length > 0) {
@@ -10319,6 +10394,7 @@ function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, onSend, o
         const key = itemKey(item);
         const shown = all || open[key] === true;
         const shownHistory = timeline[key] === true;
+        const approvals = item.kind === "approval" ? item.approvals : [];
         return (0, import_react21.createElement)(
           "li",
           { className: "bt-needs-entry", key },
@@ -10346,7 +10422,15 @@ function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, onSend, o
               className: "bt-needs-tool bt-needs-open",
               "aria-expanded": shown,
               onClick: () => toggle(key)
-            }, zh() ? "答" : "Answer") : [
+            }, zh() ? "答" : "Answer") : item.kind === "approval" ? approvals.length > 1 ? [
+              (0, import_react21.createElement)("button", {
+                key: "approval-open",
+                type: "button",
+                className: "bt-needs-tool bt-needs-open",
+                "aria-expanded": openApprovals[key] === true,
+                onClick: () => setOpenApprovals((prev) => ({ ...prev, [key]: !prev[key] }))
+              }, zh() ? `逐个处理 ${approvals.length}` : `Answer ${approvals.length}`)
+            ] : approvalButtons(approvals[0]) : [
               ...item.kind === "proposed" ? [(0, import_react21.createElement)("button", {
                 key: "approve",
                 type: "button",
@@ -10374,7 +10458,8 @@ function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, onSend, o
           ),
           item.kind === "answer" && shown ? (0, import_react21.createElement)(AnswerBox, { key: `answers-${index}`, item, onAnswer }) : null,
           item.kind === "blocked" || item.kind === "review" ? (0, import_react21.createElement)(ReplyBox, { key: `reply-${index}`, item, onSend: (said) => sendReply(item, said) }) : null,
-          item.kind !== "answer" && shownHistory ? (0, import_react21.createElement)(
+          item.kind === "approval" ? approvalDetail(item, index) : null,
+          item.kind !== "answer" && item.kind !== "approval" && shownHistory ? (0, import_react21.createElement)(
             "ol",
             { className: "bt-needs-history", "aria-label": zh() ? "这件活的历史" : "History of this work" },
             historyLines(item).map((line, at) => (0, import_react21.createElement)(
@@ -10990,6 +11075,9 @@ function TeamSidebar(props) {
       onApprove: (id) => {
         void Promise.resolve(actions.approveProposal(id)).catch((error) => actions.reportError?.(error, "approve-proposal"));
       },
+      // An approval answered here is the Main Bot deciding on the user's behalf: the
+      // host writes that in the audit, so the client names it.
+      onApproval: (id, choice) => Promise.resolve(actions.answerApproval(id, choice, roster.mainBotId ?? void 0)),
       onIgnore: (keys) => Promise.resolve(actions.dismissNeeds(keys)),
       onError: (error, tag = "needs") => actions.reportError?.(error, tag)
     }) : null,

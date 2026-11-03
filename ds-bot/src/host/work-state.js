@@ -47,6 +47,17 @@ export const waitsForUser = state => state.startsWith('person/')
 export const PROACTIVE_MODES = ['off', 'observe', 'auto']
 export const PROACTIVE_MODE = 'observe'
 
+// How long an approval in a Bot's own chat may wait before the Bot that handed the work
+// on hears that it is blocked. Short on purpose: the user may be in another chat and
+// would otherwise never learn that a Bot stopped there.
+export const APPROVAL_TIMEOUT_MS = 2 * 60_000
+
+/** The approval timeout this team runs: the constant above, overridden by plugin config. */
+export function approvalTimeoutOf(config = {}) {
+  const minutes = Number(config.approvalTimeoutMinutes)
+  return Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : APPROVAL_TIMEOUT_MS
+}
+
 // How much work the Main Bot may do on its own in one turn before it is stopped: `off`
 // stops nothing and records nothing, `audit` only records, `enforce` also stops the turn.
 // The count is the turn's tool calls, and a turn that handed work on is never stopped.

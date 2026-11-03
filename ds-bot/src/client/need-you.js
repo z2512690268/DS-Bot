@@ -18,15 +18,24 @@ const kindOf = (kind) => {
   if (kind === 'answer') return zh() ? '等你回答' : 'Waits for your answer'
   if (kind === 'blocked') return zh() ? '受阻' : 'Blocked'
   if (kind === 'proposed') return zh() ? '我本来会做' : 'I would have done'
+  if (kind === 'approval') return zh() ? '等你批准' : 'Waiting for approval'
   return zh() ? '待验收' : 'Ready to review'
 }
 
 const lineOf = (item) => {
   if (item.kind === 'answer') return item.question ?? ''
+  if (item.kind === 'approval' && (item.approvals?.length ?? 0) > 1) {
+    return zh() ? `${item.summary} · 还有 ${item.approvals.length - 1} 个` : `${item.summary} · ${item.approvals.length - 1} more`
+  }
   return item.summary ?? item.detail ?? ''
 }
 
-const itemKey = item => item.key ?? (item.kind === 'answer' ? `answer:${item.questionId}` : `${item.kind}:${item.work}`)
+const itemKey = (item) => {
+  if (item.key !== undefined) return item.key
+  if (item.kind === 'answer') return `answer:${item.questionId}`
+  if (item.kind === 'approval') return `approval:${item.sessionId}`
+  return `${item.kind}:${item.work}`
+}
 
 // The health question, in one line: what is wrong right now, and nothing when the team
 // is well. A count of zero is the quiet case, so it is left out.
@@ -208,19 +217,38 @@ export async function replyAndDismiss({ item, said, hidden = {}, at = Date.now()
   }
 }
 
-export function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, onSend, onApprove, onIgnore, onError }) {
+export function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, onSend, onApprove, onApproval, onIgnore, onError }) {
   const items = Array.isArray(all_items) ? all_items : []
   const [open, setOpen] = useState({}) // per item: is its answer field shown
   const [all, setAll] = useState(false) // every answer field at once
   const [timeline, setTimeline] = useState({}) // per work: is its history shown
   const [hidden, setHidden] = useState({}) // item key: when this window took it away
+  const [answered, setAnswered] = useState({}) // approval id: the answer this window sent
+  const [openApprovals, setOpenApprovals] = useState({}) // item key: are its folded approvals shown
   const trouble = healthLineOf(health)
   const summary = statsLineOf(stats)
+  // An approval answered here leaves at once; the host drops the request from the next
+  // poll. A failed answer puts it back and tells the user, like every other row.
   const rows = visibleItems(items, hidden)
+    .map(item => (item.kind === 'approval'
+      ? { ...item, approvals: (Array.isArray(item.approvals) ? item.approvals : []).filter(one => answered[one.id] === undefined) }
+      : item))
+    .filter(item => item.kind !== 'approval' || item.approvals.length > 0)
   if (rows.length === 0 && trouble === undefined && summary === undefined) return null
   const answers = rows.filter(item => item.kind === 'answer')
-  const works = rows.filter(item => item.kind !== 'answer')
+  const works = rows.filter(item => item.kind !== 'answer' && item.kind !== 'approval')
   const toggle = key => setOpen(prev => ({ ...prev, [key]: !prev[key] }))
+  const answerApproval = (approval, choice) => {
+    setAnswered(prev => ({ ...prev, [approval.id]: choice }))
+    void Promise.resolve(onApproval?.(approval.id, choice)).catch((error) => {
+      setAnswered((prev) => {
+        const next = { ...prev }
+        delete next[approval.id]
+        return next
+      })
+      onError?.(error, 'approval')
+    })
+  }
   // A reply takes its row away at once; the host then confirms the dismissal. A message
   // or dismissal that failed gives the row back and tells the user, so one that stayed
   // away is one that was handled.
@@ -256,6 +284,40 @@ export function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, on
       onError?.(error, 'needs-dismiss')
     })
   }
+  // The two buttons of one approval, used both on a single row and in a folded list.
+  const approvalButtons = (approval) => [
+    h('button', {
+      key: 'allow',
+      type: 'button',
+      className: 'bt-needs-answer',
+      onClick: (event) => { event.stopPropagation(); answerApproval(approval, 'allow') },
+    }, zh() ? '允许一次' : 'Allow once'),
+    h('button', {
+      key: 'reject',
+      type: 'button',
+      className: 'bt-needs-tool bt-needs-reject',
+      onClick: (event) => { event.stopPropagation(); answerApproval(approval, 'reject') },
+    }, zh() ? '拒绝' : 'Reject'),
+  ]
+  // What the policy could not decide waits under its row: the request read in full, and
+  // why the team could not settle it itself. Several requests open at once are folded
+  // into one row and opened one by one.
+  const approvalDetail = (item, index) => {
+    const approvals = item.approvals
+    if (approvals.length > 1) {
+      if (openApprovals[itemKey(item)] !== true) return null
+      return h('ul', { key: `approvals-${index}`, className: 'bt-needs-approvals', 'aria-label': zh() ? '等你逐条批准' : 'Approvals waiting for you' },
+        approvals.map(one => h('li', { key: one.id, className: 'bt-needs-approval' },
+          h('span', { className: 'bt-needs-approval-tool' }, one.tool || (zh() ? '某个工具' : 'a tool')),
+          one.reason === '' ? null : h('span', { className: 'bt-needs-approval-reason' }, one.reason),
+          one.unsure === undefined ? null : h('span', { className: 'bt-needs-unsure' }, `${zh() ? '我拿不准' : 'Not sure'}: ${one.unsure}`),
+          approvalButtons(one))))
+    }
+    const one = approvals[0]
+    return h('div', { key: `approval-${index}`, className: 'bt-needs-approval-detail' },
+      one.reason === '' ? null : h('span', { className: 'bt-needs-approval-reason' }, one.reason),
+      h('span', { className: 'bt-needs-unsure' }, `${zh() ? '我拿不准' : 'Not sure'}: ${one.unsure ?? (zh() ? '需要你决定' : 'needs your decision')}`))
+  }
   const tools = []
   if (answers.length > 0) {
     tools.push(h('button', {
@@ -287,6 +349,7 @@ export function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, on
         const key = itemKey(item)
         const shown = all || open[key] === true
         const shownHistory = timeline[key] === true
+        const approvals = item.kind === 'approval' ? item.approvals : []
         return h('li', { className: 'bt-needs-entry', key },
           h('div', { className: 'bt-needs-line' },
             h('button', {
@@ -305,7 +368,15 @@ export function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, on
               className: 'bt-needs-tool bt-needs-open',
               'aria-expanded': shown,
               onClick: () => toggle(key),
-            }, zh() ? '答' : 'Answer') : [
+            }, zh() ? '答' : 'Answer') : item.kind === 'approval' ? (approvals.length > 1 ? [
+              h('button', {
+                key: 'approval-open',
+                type: 'button',
+                className: 'bt-needs-tool bt-needs-open',
+                'aria-expanded': openApprovals[key] === true,
+                onClick: () => setOpenApprovals(prev => ({ ...prev, [key]: !prev[key] })),
+              }, zh() ? `逐个处理 ${approvals.length}` : `Answer ${approvals.length}`),
+            ] : approvalButtons(approvals[0])) : [
               ...(item.kind === 'proposed' ? [h('button', {
                 key: 'approve',
                 type: 'button',
@@ -332,7 +403,8 @@ export function NeedsYou({ items: all_items, health, stats, onOpen, onAnswer, on
             ]),
           item.kind === 'answer' && shown ? h(AnswerBox, { key: `answers-${index}`, item, onAnswer }) : null,
           item.kind === 'blocked' || item.kind === 'review' ? h(ReplyBox, { key: `reply-${index}`, item, onSend: said => sendReply(item, said) }) : null,
-          item.kind !== 'answer' && shownHistory ? h('ol', { className: 'bt-needs-history', 'aria-label': zh() ? '这件活的历史' : 'History of this work' },
+          item.kind === 'approval' ? approvalDetail(item, index) : null,
+          item.kind !== 'answer' && item.kind !== 'approval' && shownHistory ? h('ol', { className: 'bt-needs-history', 'aria-label': zh() ? '这件活的历史' : 'History of this work' },
             historyLines(item).map((line, at) => h('li', { key: at },
               h('span', { className: 'bt-needs-hist-time' }, line.time),
               h('span', { className: 'bt-needs-hist-text' }, line.text)))) : null)

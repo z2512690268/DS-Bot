@@ -112,7 +112,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     answerView: (sessionId, viewId, action, values) => after(call('view-reply', { sessionId: partFor(sessionId), viewId, action, values })),
     dismissView: sessionId => after(call('dismiss-view', { sessionId: partFor(sessionId) })),
     deleteBtw: (sessionId, cardId) => after(call('btw-delete', { sessionId, cardId })),
-    answerApproval: (id, choice) => after(call('approval-answer', { id, choice })),
+    answerApproval: (id, choice, by) => after(call('approval-answer', { id, choice, ...(by ? { by } : {}) })),
     stopMemberWork: (roomId, botId) => after(call('stop-member-work', { roomId, botId })),
     stopRoomWork: roomId => after(call('stop-room-work', { roomId })),
     goalDraft: (roomId, text) => after(call('goal-draft', { roomId, text })),

@@ -283,3 +283,80 @@ test('one work\'s history reads as a timeline from the moment it was opened', ()
     history: [{ at: 0, event: 'created' }, { at: 5_000, event: 'closed', final: 'ready' }],
   }).map(line => line.text), ['Created', 'Ended: Ready'])
 })
+
+// An approval the policy could not decide: the row says what the Bot wants to run, why,
+// and why the team could not settle it, and answers through the same inbox.
+const approvalItem = (approvals) => [{
+  kind: 'approval', botId: 'b', bot: 'Writer', sessionId: 'b', since: 10, key: 'approval:b',
+  summary: 'pwsh: escalate sandbox to danger-full-access: install deps',
+  unsure: 'no rule covers this request',
+  ...(approvals.length > 1 ? { more: approvals.length - 1 } : {}),
+  approvals,
+}]
+const approvalOne = (id, at = 10) => ({ id, tool: 'pwsh', reason: 'escalate sandbox to danger-full-access: install deps', unsure: 'no rule covers this request', at })
+
+test('an approval says what it is for, why the team is unsure, and both answers', () => {
+  const tree = NeedsYou({ items: approvalItem([approvalOne('ap1')]), onOpen() {}, onApproval() {}, onError() {} })
+  assert.match(textOf(tree), /Waiting for approval/)
+  assert.match(textOf(tree), /pwsh: escalate sandbox to danger-full-access: install deps/)
+  assert.match(textOf(tree), /Not sure: no rule covers this request/)
+  assert.ok(byText(tree, 'Allow once'))
+  assert.ok(byText(tree, 'Reject'))
+  assert.equal(byText(tree, 'History'), undefined, 'an approval has no work history')
+})
+
+test('an approval is answered from its row and leaves at once', async () => {
+  const answered = []
+  const ui = mount({
+    items: approvalItem([approvalOne('ap1')]),
+    onOpen() {},
+    onApproval: (id, choice) => { answered.push([id, choice]); return Promise.resolve() },
+    onError() {},
+  })
+  assert.equal(ui.rows().filter(row => row.props['data-kind'] === 'approval').length, 1)
+  ui.clicked('Allow once')
+  assert.deepEqual(answered, [['ap1', 'allow']])
+  assert.equal(ui.rows().filter(row => row.props['data-kind'] === 'approval').length, 0, 'the row leaves at once')
+})
+
+test('an approval answer that failed brings the row back and tells the user', async () => {
+  const errors = []
+  const ui = mount({
+    items: approvalItem([approvalOne('ap1')]),
+    onOpen() {},
+    onApproval: () => Promise.reject(new Error('This approval is no longer open')),
+    onError: (error, tag) => errors.push([error.message, tag]),
+  })
+  ui.clicked('Reject')
+  assert.equal(ui.rows().filter(row => row.props['data-kind'] === 'approval').length, 0)
+  await ui.settle()
+  assert.equal(ui.rows().filter(row => row.props['data-kind'] === 'approval').length, 1, 'the row is back')
+  assert.deepEqual(errors, [['This approval is no longer open', 'approval']])
+})
+
+test('several approvals in one chat fold into one row and open one by one', async () => {
+  const answered = []
+  const ui = mount({
+    items: approvalItem([approvalOne('ap1', 10), approvalOne('ap2', 20)]),
+    onOpen() {},
+    onApproval: (id, choice) => { answered.push([id, choice]); return Promise.resolve() },
+    onError() {},
+  })
+  assert.equal(ui.rows().filter(row => row.props['data-kind'] === 'approval').length, 1, 'one row, not two')
+  assert.equal(ui.button('Allow once'), undefined, 'a folded row answers from its list')
+  ui.clicked('Answer 2')
+  assert.ok(ui.button('Allow once'), 'the list of requests is open')
+  ui.clicked('Allow once')
+  assert.deepEqual(answered, [['ap1', 'allow']])
+  assert.equal(ui.button('Allow once') !== undefined, true, 'the second one is still there')
+  ui.clicked('Allow once')
+  assert.deepEqual(answered, [['ap1', 'allow'], ['ap2', 'allow']])
+  await ui.settle()
+  assert.equal(ui.rows().filter(row => row.props['data-kind'] === 'approval').length, 0)
+})
+
+test('the batch ignore clears works only, never an approval', () => {
+  const tree = NeedsYou({ items: [...items(), ...approvalItem([approvalOne('ap1')])], onOpen() {}, onIgnore() {}, onApproval() {} })
+  assert.ok(byText(tree, 'Ignore 3'), 'the three works are cleared together')
+  assert.equal(byText(tree, 'Ignore 4'), undefined, 'the approval is not a work to ignore')
+})

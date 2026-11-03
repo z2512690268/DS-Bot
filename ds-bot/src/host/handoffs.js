@@ -736,7 +736,7 @@ export function install(rt) {
 
   // The key a panel sends back to ignore one item: what it is, and which one, so that
   // ignoring a work does not hide the next state the same work comes back in.
-  const needKey = item => (item.kind === 'answer' ? `answer:${item.questionId}` : `${item.kind}:${item.work}`)
+  const needKey = item => (item.kind === 'answer' ? `answer:${item.questionId}` : item.kind === 'approval' ? `approval:${item.sessionId}` : `${item.kind}:${item.work}`)
 
   // The row a work appears under: the kind, and the moment its current state began. The
   // inbox and the health line both read it, so a row the user dismissed is not news in
@@ -817,6 +817,9 @@ export function install(rt) {
         history: work.history ?? [],
       })
     }
+    // Approvals the policy could not decide wait here too, with the reason it could not:
+    // one row per conversation, however many requests that Bot has open.
+    for (const approval of rt.approvalNeeds?.() ?? []) items.push(approval)
     return items
       .map(item => ({ ...item, key: needKey(item) }))
       .filter(item => !dismissedAt(item.key, item.since))

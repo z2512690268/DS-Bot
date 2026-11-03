@@ -81,6 +81,9 @@ export function install(rt) {
     // The Main Bot's own work in the last day: how many of its turns were done alone and
     // how many works it handed on. Quiet when it has done nothing either way.
     workAudit: rt.workAudit?.() ?? null,
+    // Approvals the team decided itself, and those a Main Bot answered for the user: the
+    // rule, the actor and the time, so a decision made without the user stays visible.
+    approvalAudit: rt.approvalAudit?.() ?? [],
     // Key names and who may use them; values never leave the host.
     secrets: rt.secretsView(),
     capabilities: rt.capabilityLibraryView(),
@@ -366,9 +369,13 @@ export function install(rt) {
           await rt.load()
           await rt.deleteRoom(body.id)
           return ok(view())
-        case 'approval-answer':
-          rt.answerApproval(body.id, body.choice)
+        case 'approval-answer': {
+          // A Main Bot answering from the main chat says so: the audit names it, and a
+          // client cannot pass another Bot off as the Main Bot.
+          const by = typeof body.by === 'string' && (state.mainBotIds ?? []).includes(body.by) ? body.by : undefined
+          rt.answerApproval(body.id, body.choice, by)
           return ok(true)
+        }
         case 'stop-member-work': {
           const stopped = await rt.stopMemberWork(String(body.roomId ?? ''), String(body.botId ?? ''))
           rt.goalUserStopped?.(String(body.roomId ?? ''))
