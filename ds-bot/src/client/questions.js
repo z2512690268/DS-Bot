@@ -59,12 +59,25 @@ export function useOptionKeys(count, onPick, ownRef) {
 function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false, ownAnswer = false, raised = false, enterToSend = true }) {
   const [own, setOwn] = useState('')
   const [picked, setPicked] = useState([])
+  const [full, setFull] = useState(false)
   const ownRef = useRef(null)
   const titleId = useId()
   const options = optionsOf(question)
   const multi = question.multiSelect === true
   const custom = own.trim()
   const canSubmit = multi ? picked.length > 0 || custom !== '' : custom !== ''
+  // A long detail is folded to three lines; "Show more" opens it, and so does a
+  // double-click on the row that points at this card.
+  const longDetail = typeof question.detail === 'string' && question.detail.length > 240
+  const detail = question.detail
+    ? h('div', { className: 'bt-q-detail', ...(longDetail ? { 'data-card-collapsed': full ? 'false' : 'true' } : {}) }, question.detail)
+    : null
+  const more = longDetail
+    ? h('button', {
+      type: 'button', className: 'bt-q-more', 'data-card-toggle': '', 'aria-expanded': full,
+      onClick: (event) => { event.stopPropagation(); setFull(value => !value) },
+    }, full ? t('Show less') : t('Show more'))
+    : null
   const choose = (label) => {
     if (busy) return
     onInteract?.()
@@ -123,13 +136,15 @@ function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false,
   return h('form', {
     className: raised ? 'bt-q bt-q-raised' : 'bt-q', 'aria-labelledby': titleId,
     'aria-busy': busy || undefined,
+    'data-question-id': question.id,
     onFocusCapture: onInteract, onPointerDownCapture: onInteract,
     onSubmit: (event) => { event.preventDefault(); submit() },
   },
     h('div', { className: 'bt-q-head' },
       h('div', { className: 'bt-q-text' },
         h('p', { className: 'bt-q-title', id: titleId }, question.header ? `${question.header} · ` : '', question.question),
-        question.detail ? h('div', { className: 'bt-q-detail' }, question.detail) : null,
+        detail,
+        more,
         raised && multi ? h('div', { className: 'bt-q-detail' }, t('Choose all that apply')) : null),
       h('button', { type: 'button', className: 'bt-q-x', 'aria-label': t('Dismiss question'), title: t('Dismiss'), onClick: onDismiss, disabled: busy }, h(CloseIcon))),
     rows.length > 0 ? h('div', { className: 'bt-q-list', role: 'group' }, rows) : null,

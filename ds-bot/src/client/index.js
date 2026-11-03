@@ -46,6 +46,7 @@ import { MEMBER_CSS, MemberDock } from './member-status.js'
 import { GOAL_CSS } from './goal.js'
 import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-message.js'
 import { noticeApprovals } from './approval-notices.js'
+import { cardFocus, focusCard, jumpToCard } from './card-focus.js'
 import { listedOpener } from './open-listed.js'
 
 export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout']
@@ -463,6 +464,13 @@ export function apply(ctx) {
       const target = partFor(id)
       show(target)
     },
+    // The row a "needs you" card points at: open its conversation and ask it to bring
+    // the card into view once the conversation has drawn it.
+    openNeedsItem: (item) => {
+      const target = item.sessionId ?? item.botId
+      if (target !== undefined) actions.openSession(target)
+      return focusCard(item)
+    },
     // The conversation replacements withdraw for a plain Session; set the surface
     // before the navigation so the Bot skin never flashes.
     openAgentSession: (sessionId) => {
@@ -726,6 +734,40 @@ export function apply(ctx) {
     shownSession: () => Object.values(ctx.sessions.list.getSnapshot().byId ?? {}).find(session => (session?.retainedBy?.mainView ?? 0) > 0)?.id,
     openSession: id => actions.openSession(id),
   }), 'ds-bot: approval notifications')
+  // Double-clicking a "needs you" row asks for its card: wait for that conversation to
+  // be on screen, then scroll the card up, unfold it and flash it. The card can arrive a
+  // moment after the navigation (history loads, the question card mounts), so keep
+  // trying briefly instead of flashing nothing.
+  ctx.effect(() => {
+    let token
+    let timer
+    const stop = () => {
+      if (timer !== undefined) clearInterval(timer)
+      timer = undefined
+    }
+    const run = () => {
+      const request = cardFocus.getSnapshot()
+      if (request === null || request.token === token) return
+      token = request.token
+      stop()
+      let tries = 0
+      const attempt = () => {
+        const view = mainView()
+        const wanted = request.sessionId === undefined ? undefined : partFor(request.sessionId)
+        // The navigation may not have landed yet: wait for the target conversation.
+        if (wanted !== undefined && view !== wanted) {
+          if (++tries > 60) stop()
+          return
+        }
+        if (jumpToCard(request) !== undefined || ++tries > 60) stop()
+      }
+      timer = setInterval(attempt, 60)
+      attempt()
+    }
+    const off = cardFocus.subscribe(run)
+    run()
+    return () => { off(); stop() }
+  }, 'ds-bot: bring up the card a needs-you row points at')
   const assistantFace = (sessionId) => {
     const binding = ctx.sessions.binding(sessionId)
     if (binding === undefined) throw new Error(`ds-bot: unknown session "${sessionId}"`)

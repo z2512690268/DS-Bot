@@ -116,6 +116,14 @@ dsh-superagent 的做法是把这两件事都变成字段：结果带 `state`（
 - 面板另有一行 24 小时摘要（关闭数、中位时长、停滞、失败），安静的日子不出现。
 - `rt.workHistory(id)`：一件活从创建到结束的时间线（`created` / `proposed` / 各次 `report` / `stalled` / `closed`），开着的活读记录，关掉的活读 `workLog`；`needsYou()` 的工作条目也带上它，面板在行内展开。
 
+### 双击跳到卡片
+
+- 「需要你」每一行都支持双击（键盘聚焦后按 Enter 等同）：打开该行指向的会话，并让会话里的那张卡进入视口。
+- 目标：`answer` 找 `[data-question-id="<questionId>"]`；`approval` 找 DSH 自己的 `[data-approval-key]`；`blocked` / `review` / `proposed` 没有独立卡片，定位到会话里最新的一行 `[data-chat-flow] > [data-chat-flow-key]`。
+- 定位后滚动到中间，加 1.5 秒的 `bt-card-flash` 提示；折叠的卡片会被展开：卡片自己的展开按钮标 `data-card-toggle` 且折叠时 `aria-expanded="false"`，纯 CSS 折叠的内容标 `data-card-collapsed`；卡片同时得到 `data-card-expanded="true"`。
+- 单击保持原样：只打开会话，不滚动、不展开。双击会先触发两次单击再触发双击，重复打开同一会话是幂等的。
+- 问题卡的 `detail` 超过 240 字时默认折三行，带「展开 / 收起」。
+
 ### 并发
 
 - 任何 Bot 正在跑的回合数达到 8 时，Bot 之间的消息不再插进对方的当前回合，改为等它下一个回合。用户自己的消息不受这条限制：它总是直接开始一个回合。
@@ -145,3 +153,4 @@ dsh-superagent 的做法是把这两件事都变成字段：结果带 `state`（
 - 2026-11-02：定下。
 - 2026-11-02：停滞判定把"有存活的后台 job"算作进展（预期时长期限、无输出才失效），摘要会写明 job 已静默多久；设计口径是"等待本身就是进展"。
 - 2026-11-02：补上协议层剩余项——租约到期动作（通知上游 / 可选幂等重派）、观察模式（`proactive`，`proposed` 活进收件箱）、度量（`workLog` + `rt.workStats()`）、收件箱批量处理（`key` + `needs-dismiss`）、面板的健康与历史两问（`rt.workHealth()` / `rt.workHistory()`）。
+- 2026-11-03：收件箱每行支持双击 / Enter 跳转卡片，滚动到视口并展开折叠内容（`data-card-toggle` / `data-card-collapsed` 约定）；问题卡长 `detail` 折三行。
