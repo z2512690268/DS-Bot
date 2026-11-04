@@ -12,15 +12,14 @@
 // recorded.
 //
 // Time is measured from the turn's start on a monotonic clock and is forgotten when the
-// turn ends or is stopped, so no turn inherits another's minutes.
+// turn ends or is stopped, so no turn inherits another's seconds.
 import { mainGateOf } from './work-state.js'
 
 // The mark a stopped turn carries in its end reason.
 export const WORK_GATE = 'ds-bot/work-gate'
 const AUDIT_MAX = 500
 const DAY_MS = 24 * 60 * 60_000
-const SWEEP_MS = 10_000
-const MINUTE_MS = 60_000
+const SWEEP_MS = 5_000
 const SHELL_TOOLS = new Set(['bash', 'pwsh', 'bash-persistent', 'pwsh-persistent'])
 const WRITE_TOOLS = new Set(['write', 'edit'])
 const DISPATCH_TOOLS = new Set(['message_bot', 'post_to_group', 'keep_working'])
@@ -128,8 +127,8 @@ export function install(rt) {
     const value = rt.monotonicNow?.()
     return typeof value === 'number' && Number.isFinite(value) ? value : performance.now()
   }
-  const minutesSince = (turn, at = now()) => Math.max(0, (at - turn.startedAt) / MINUTE_MS)
-  const minutesOf = value => Math.max(1, Math.floor(value))
+  const secondsSince = (turn, at = now()) => Math.max(0, (at - turn.startedAt) / 1_000)
+  const secondsOf = value => Math.max(1, Math.round(value))
 
   const noteCall = (turn, name, args) => {
     turn.tools += 1
@@ -151,10 +150,10 @@ export function install(rt) {
   // "stopped, waiting for your next instruction" line, with no further explanation.
   function noticeOf(gate, turn) {
     if (gate.id === 'soft') {
-      return `This turn has been running ${minutesOf(gate.minutes)} min and has made ${turn.tools} tool calls. Can this work be handed to a Bot? Can it be narrowed? Your next message must hand it on, narrow it, or call keep_working with the reason you must continue.`
+      return `This turn has been running ${secondsOf(gate.seconds)} sec and has made ${turn.tools} tool calls. Can this work be handed to a Bot? Can it be narrowed? Your next message must hand it on, narrow it, or call keep_working with the reason you must continue.`
     }
     if (gate.id === 'hard') {
-      return `This turn passed ${minutesOf(gate.minutes)} min and was stopped. Hand the work to a Bot, or call keep_working with the reason you must continue.\nReply to the user with one sentence on where things stand and then exactly "已停手，等你下一条指令"; do not explain further.`
+      return `This turn passed ${secondsOf(gate.seconds)} sec and was stopped. Hand the work to a Bot, or call keep_working with the reason you must continue.\nReply to the user with one sentence on where things stand and then exactly "已停手，等你指令"; do not explain further.`
     }
     return `This turn has called ${gate.tool} on ${gate.target} ${gate.count} times. That machine or thing already has a Bot responsible; hand the work back, or call keep_working with the reason you must do it yourself.`
   }
@@ -163,7 +162,7 @@ export function install(rt) {
     return {
       gate: gate.id,
       at: Date.now(),
-      ...(gate.id === 'soft' || gate.id === 'hard' ? { minutes: Math.round(gate.minutes * 10) / 10, limit: gate.id === 'soft' ? policy.softMinutes : policy.hardMinutes } : {}),
+      ...(gate.id === 'soft' || gate.id === 'hard' ? { seconds: Math.round(gate.seconds), limit: gate.id === 'soft' ? policy.softSeconds : policy.hardSeconds } : {}),
       ...(gate.id === 'same-target' ? { threshold: gate.threshold, tool: gate.tool, target: gate.target, count: gate.count } : {}),
       tools: turn.tools,
       dispatched: turn.dispatched,
@@ -183,15 +182,18 @@ export function install(rt) {
     const botId = botOfSession(sessionId)
     void (async () => {
       try {
-        await rt.deliver({ toId: botId, role: 'gate', text })
-      } catch (error) {
-        rt.warn('ds-bot: the work-gate notice to %s was not delivered: %s', botId, error)
-      }
-      try {
         const agent = await rt.resolveAgent(sessionId)
+        // Abort the active operation before anything else: a tool call that is already
+        // running gets the turn's abort signal, so a long foreground command is cut
+        // now rather than when it happens to return.
         agent.cancel({ kind: 'hook', reason: WORK_GATE })
       } catch (error) {
         rt.warn('ds-bot: the work-gate could not stop %s: %s', sessionId, error)
+      }
+      try {
+        await rt.deliver({ toId: botId, role: 'gate', text })
+      } catch (error) {
+        rt.warn('ds-bot: the work-gate notice to %s was not delivered: %s', botId, error)
       }
     })()
     return true
@@ -219,9 +221,9 @@ export function install(rt) {
   function timeGateIfNeeded(sessionId, turn, at = now()) {
     if (policy.mode === 'off' || turn.gated || turn.kept !== undefined) return false
     if (!isMainSession(sessionId)) return false
-    const minutes = minutesSince(turn, at)
-    if (minutes >= policy.hardMinutes) return stopTurn(sessionId, turn, { id: 'hard', minutes })
-    if (!turn.softNotified && minutes >= policy.softMinutes) return remindSoft(sessionId, turn, { id: 'soft', minutes })
+    const seconds = secondsSince(turn, at)
+    if (seconds >= policy.hardSeconds) return stopTurn(sessionId, turn, { id: 'hard', seconds })
+    if (!turn.softNotified && seconds >= policy.softSeconds) return remindSoft(sessionId, turn, { id: 'soft', seconds })
     return false
   }
 

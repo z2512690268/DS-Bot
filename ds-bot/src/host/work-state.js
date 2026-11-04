@@ -62,20 +62,20 @@ export function approvalTimeoutOf(config = {}) {
 // nothing, `audit` only records, `enforce` also interrupts. The limits are time, not
 // counts, and a turn that handed work on is held to them just the same:
 //
-// - `softMinutes`: a reflection is steered into the running turn, asking the Main Bot to
+// - `softSeconds`: a reflection is steered into the running turn, asking the Main Bot to
 //   hand it on, narrow it, or say why it must continue (once per turn);
-// - `hardMinutes`: the turn is stopped; only `keep_working` lets it go on;
+// - `hardSeconds`: the turn is stopped; only `keep_working` lets it go on;
 // - `sameTarget`: the auxiliary repeat limit — the same tool on the same host, path or
 //   service this many times, which usually means it is doing a Bot's debugging.
 export const MAIN_GATE_MODES = ['off', 'audit', 'enforce']
 export const MAIN_GATE_MODE = 'enforce'
-export const MAIN_GATE_SOFT_MINUTES = 3
-export const MAIN_GATE_HARD_MINUTES = 10
+export const MAIN_GATE_SOFT_SECONDS = 45
+export const MAIN_GATE_HARD_SECONDS = 120
 export const MAIN_GATE_SAME_TARGET = 4
 
 /** The Main Bot's own-work gate: the constants above, overridden by plugin config. */
 export function mainGateOf(config = {}) {
-  const minutes = (value, fallback) => {
+  const seconds = (value, fallback) => {
     const count = Number(value)
     return Number.isFinite(count) && count > 0 ? count : fallback
   }
@@ -85,8 +85,8 @@ export function mainGateOf(config = {}) {
   }
   return {
     mode: MAIN_GATE_MODES.includes(config.mainWorkGate) ? config.mainWorkGate : MAIN_GATE_MODE,
-    softMinutes: minutes(config.mainTurnSoftMinutes, MAIN_GATE_SOFT_MINUTES),
-    hardMinutes: minutes(config.mainTurnHardMinutes, MAIN_GATE_HARD_MINUTES),
+    softSeconds: seconds(config.mainTurnSoftSeconds, MAIN_GATE_SOFT_SECONDS),
+    hardSeconds: seconds(config.mainTurnHardSeconds, MAIN_GATE_HARD_SECONDS),
     sameTarget: calls(config.mainWorkSameTarget, MAIN_GATE_SAME_TARGET),
   }
 }

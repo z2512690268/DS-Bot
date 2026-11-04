@@ -124,12 +124,12 @@ test('the repeat target is the host, path or service a call names', () => {
   assert.equal(toolTargetOf('bash', { command: 'ls -la' }), undefined)
 })
 
-test('the gate defaults to enforce, a 3-minute soft line and a 10-minute hard line', () => {
-  assert.deepEqual(mainGateOf(), { mode: 'enforce', softMinutes: 3, hardMinutes: 10, sameTarget: 4 })
-  assert.deepEqual(mainGateOf({ mainWorkGate: 'audit', mainTurnSoftMinutes: 1, mainTurnHardMinutes: 5, mainWorkSameTarget: 2 }),
-    { mode: 'audit', softMinutes: 1, hardMinutes: 5, sameTarget: 2 })
-  assert.deepEqual(mainGateOf({ mainWorkGate: 'sometimes', mainTurnSoftMinutes: -1, mainTurnHardMinutes: 0, mainWorkSameTarget: 0 }),
-    { mode: 'enforce', softMinutes: 3, hardMinutes: 10, sameTarget: 4 })
+test('the gate defaults to enforce, a 45-second soft line and a 120-second hard line', () => {
+  assert.deepEqual(mainGateOf(), { mode: 'enforce', softSeconds: 45, hardSeconds: 120, sameTarget: 4 })
+  assert.deepEqual(mainGateOf({ mainWorkGate: 'audit', mainTurnSoftSeconds: 10, mainTurnHardSeconds: 20, mainWorkSameTarget: 2 }),
+    { mode: 'audit', softSeconds: 10, hardSeconds: 20, sameTarget: 2 })
+  assert.deepEqual(mainGateOf({ mainWorkGate: 'sometimes', mainTurnSoftSeconds: -1, mainTurnHardSeconds: 0, mainWorkSameTarget: 0 }),
+    { mode: 'enforce', softSeconds: 45, hardSeconds: 120, sameTarget: 4 })
 })
 
 test('the soft line steers a reflection into the running turn and does not stop it', async (t) => {
@@ -139,14 +139,14 @@ test('the soft line steers a reflection into the running turn and does not stop 
   host.emit('a', 'turn/start', { turn: 1 })
   toolCall(host, 'a', 0)
   toolCall(host, 'a', 1)
-  clock += 3 * 60_000
+  clock += 45_000
   assert.equal(host.rt.sweepWorkGate(), true)
   await settle()
   assert.deepEqual(cancelledAt(host, 'a'), [], 'the soft line does not stop the turn')
   const notice = lastNotice(host, 'a')
   assert.equal(notice[0], 'steer', 'the reflection cuts into the running turn')
   assert.match(textOf(notice[1]), /^\[A check on this turn\]/)
-  assert.match(textOf(notice[1]), /running 3 min/)
+  assert.match(textOf(notice[1]), /running 45 sec/)
   assert.match(textOf(notice[1]), /2 tool calls/)
   assert.match(textOf(notice[1]), /hand it on, narrow it, or call keep_working/)
   // It is asked once, not on every sweep.
@@ -159,10 +159,10 @@ test('the soft line steers a reflection into the running turn and does not stop 
   assert.equal(entry.gated, undefined, 'a soft check is not a stop')
   assert.equal(entry.gates.length, 1)
   assert.equal(entry.gates[0].gate, 'soft')
-  assert.equal(entry.gates[0].minutes, 3)
+  assert.equal(entry.gates[0].seconds, 45)
   assert.equal(entry.gates[0].tools, 2)
   assert.equal(entry.gates[0].dispatched, false)
-  assert.match(entry.gates[0].text, /running 3 min/)
+  assert.match(entry.gates[0].text, /running 45 sec/)
 })
 
 test('the hard line stops the turn and tells the Bot how to answer the user', async (t) => {
@@ -171,26 +171,43 @@ test('the hard line stops the turn and tells the Bot how to answer the user', as
   host.rt.monotonicNow = () => clock
   host.emit('a', 'turn/start', { turn: 1 })
   toolCall(host, 'a', 0)
-  clock = 10 * 60_000 + 1
+  clock = 120_000 + 1
   assert.equal(host.rt.sweepWorkGate(), true)
   await settle()
   assert.deepEqual(cancelledAt(host, 'a'), [{ kind: 'hook', reason: WORK_GATE }])
   const notice = lastNotice(host, 'a')
   assert.equal(notice[0], 'followup')
   assert.match(textOf(notice[1]), /^\[DS Bot stopped this turn\]/)
-  assert.match(textOf(notice[1]), /passed 10 min and was stopped/)
+  assert.match(textOf(notice[1]), /passed 120 sec and was stopped/)
   assert.match(textOf(notice[1]), /keep_working/)
-  assert.match(textOf(notice[1]), /已停手，等你下一条指令/)
+  assert.match(textOf(notice[1]), /已停手，等你指令/)
   host.emit('a', 'turn/end', { turn: 1, reason: { kind: 'aborted' } })
   const entry = host.rt.state.mainTurns.at(-1)
   assert.equal(entry.gated, true)
   assert.equal(entry.gates.length, 1)
   assert.equal(entry.gates[0].gate, 'hard')
-  assert.equal(entry.gates[0].minutes, 10)
-  assert.equal(entry.gates[0].limit, 10)
+  assert.equal(entry.gates[0].seconds, 120)
+  assert.equal(entry.gates[0].limit, 120)
   assert.equal(entry.gates[0].tools, 1)
   assert.equal(entry.gates[0].dispatched, false)
   assert.match(entry.gates[0].text, /已停手/)
+})
+
+test('the hard line interrupts a tool that has not returned yet', async (t) => {
+  const host = await bench(t).start()
+  let clock = 0
+  host.rt.monotonicNow = () => clock
+  host.emit('a', 'turn/start', { turn: 1 })
+  host.emit('a', 'tool/call', { callId: 'slow', name: 'bash', arguments: JSON.stringify({ command: 'ssh gpu1 sleep 300' }) })
+  // No tool/result: the gate must not wait for the long command to return.
+  clock = 120_000 + 1
+  assert.equal(host.rt.sweepWorkGate(), true)
+  await settle()
+  assert.deepEqual(cancelledAt(host, 'a'), [{ kind: 'hook', reason: WORK_GATE }])
+  host.emit('a', 'turn/end', { turn: 1, reason: { kind: 'aborted' } })
+  const entry = host.rt.state.mainTurns.at(-1)
+  assert.equal(entry.gates[0].gate, 'hard')
+  assert.equal(entry.gates[0].seconds, 120)
 })
 
 test('a turn that handed work on is still stopped at the hard line', async (t) => {
@@ -199,7 +216,7 @@ test('a turn that handed work on is still stopped at the hard line', async (t) =
   host.rt.monotonicNow = () => clock
   host.emit('a', 'turn/start', { turn: 1 })
   assert.match(await host.tool('message_bot', { to: 'Writer', message: 'do it' }, 'a'), /Delivered to Writer/)
-  clock = 10 * 60_000 + 1
+  clock = 120_000 + 1
   assert.equal(host.rt.sweepWorkGate(), true)
   await settle()
   assert.deepEqual(cancelledAt(host, 'a'), [{ kind: 'hook', reason: WORK_GATE }])
@@ -215,11 +232,11 @@ test('keep_working turns off the remaining time gates for the turn', async (t) =
   let clock = 0
   host.rt.monotonicNow = () => clock
   host.emit('a', 'turn/start', { turn: 1 })
-  clock = 3 * 60_000 + 1
+  clock = 45_000 + 1
   host.rt.sweepWorkGate()
   await settle()
   assert.match(await host.tool('keep_working', { reason: '用户明确要求我直接查这台机器' }, 'a'), /Recorded/)
-  clock = 30 * 60_000
+  clock = 5 * 60_000
   assert.equal(host.rt.sweepWorkGate(), false)
   await settle()
   assert.deepEqual(cancelledAt(host, 'a'), [])
@@ -235,7 +252,7 @@ test('keep_working after a hard stop links its reason to the gate', async (t) =>
   let clock = 0
   host.rt.monotonicNow = () => clock
   host.emit('a', 'turn/start', { turn: 1 })
-  clock = 10 * 60_000 + 1
+  clock = 120_000 + 1
   host.rt.sweepWorkGate()
   await settle()
   host.emit('a', 'turn/end', { turn: 1, reason: { kind: 'aborted' } })
@@ -273,15 +290,15 @@ test('the same tool on the same target stops at the fourth call', async (t) => {
 })
 
 test('the time thresholds are configurable', async (t) => {
-  const host = await bench(t).start({ mainTurnSoftMinutes: 1, mainTurnHardMinutes: 2 })
+  const host = await bench(t).start({ mainTurnSoftSeconds: 10, mainTurnHardSeconds: 20 })
   let clock = 0
   host.rt.monotonicNow = () => clock
   host.emit('a', 'turn/start', { turn: 1 })
-  clock = 60_000
+  clock = 10_000
   assert.equal(host.rt.sweepWorkGate(), true)
   await settle()
   assert.deepEqual(cancelledAt(host, 'a'), [])
-  clock = 2 * 60_000
+  clock = 20_000
   assert.equal(host.rt.sweepWorkGate(), true)
   await settle()
   assert.deepEqual(cancelledAt(host, 'a'), [{ kind: 'hook', reason: WORK_GATE }])
@@ -302,7 +319,7 @@ test('audit mode records the time gates without stopping; off records nothing', 
   let clock = 0
   auditHost.rt.monotonicNow = () => clock
   auditHost.emit('a', 'turn/start', { turn: 1 })
-  clock = 10 * 60_000 + 1
+  clock = 120_000 + 1
   assert.equal(auditHost.rt.sweepWorkGate(), true)
   await settle()
   assert.deepEqual(cancelledAt(auditHost, 'a'), [])
@@ -321,7 +338,7 @@ test('audit mode records the time gates without stopping; off records nothing', 
 })
 
 test('another Bot is not time-gated, repeat-gated or audited', async (t) => {
-  const host = await bench(t).start({ mainTurnSoftMinutes: 0.01, mainTurnHardMinutes: 0.02, mainWorkSameTarget: 2 })
+  const host = await bench(t).start({ mainTurnSoftSeconds: 1, mainTurnHardSeconds: 2, mainWorkSameTarget: 2 })
   let clock = 0
   host.rt.monotonicNow = () => clock
   host.emit('b', 'turn/start', { turn: 1 })
@@ -340,7 +357,7 @@ test('a group round the Main Bot talks in is gated the same way', async (t) => {
   host.rt.monotonicNow = () => 0
   host.rt.groupOwners.set('ga', { roomId: 'r1', botId: 'a' })
   host.emit('ga', 'turn/start', { turn: 1 })
-  host.rt.monotonicNow = () => 11 * 60_000
+  host.rt.monotonicNow = () => 130_000
   assert.equal(host.rt.sweepWorkGate(), true)
   await settle()
   assert.deepEqual(host.agents.get('ga')?.cancelled ?? [], [{ kind: 'hook', reason: WORK_GATE }])
