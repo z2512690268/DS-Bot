@@ -791,7 +791,9 @@ export function install(rt) {
       const row = workRowOf(work)
       return !dismissedAt(`${row.kind}:${id}`, row.since)
     }).length
-    return { stalled, deliveryFailures: recent('delivery'), answerFailures: recent('answer') }
+    // Model calls the team had to retry, and those that still ended failed.
+    const retry = rt.llmRetryView?.(now) ?? { retries: 0, retryFailures: 0 }
+    return { stalled, deliveryFailures: recent('delivery'), answerFailures: recent('answer'), retries: retry.retries, retryFailures: retry.retryFailures }
   }
 
   // Everything that waits for the user, in one list: the question cards the team has
@@ -1119,6 +1121,41 @@ export function install(rt) {
     return rows
   }
 
+  // A model call that failed for good: the owner cannot answer, so its open work is
+  // marked failed and the Bot that asked is told what happened, instead of waiting on a
+  // chain that silently stopped.
+  async function notifyFailure(work, line) {
+    if (work.from === undefined || rt.botOf(work.from) === undefined) return
+    const text = `The work you handed on to ${nameOf(work.to)} could not be answered: its model calls kept failing (${line}) after the retries. The work is marked failed. Decide what to do with it: send it again, hand it to another Bot, or tell the user.`
+    await rt.deliver({ fromId: work.to, toId: work.from, role: 'work-failed', text })
+  }
+
+  function failWorkOf(sessionId, failure, attempts = 0) {
+    const botId = rt.selfOf(sessionId)
+    if (botId === undefined) return false
+    const at = Date.now()
+    const line = `${failure?.code ?? 'ERROR'}${failure?.message ? `: ${String(failure.message).slice(0, 200)}` : ''}`
+    let changed = false
+    for (const [id, work] of Object.entries(works())) {
+      if (work.to !== botId) continue
+      if (work.report !== undefined && work.report.state !== 'progress') continue
+      if (waitsForUser(workStateOf(work, at).state)) continue
+      work.report = { state: 'failed', summary: `the model call failed after ${attempts} retries (${line})`, at }
+      // The chain is not coming back by itself: the nudge would only burn turns on the
+      // same failing route.
+      work.halted = { at, reason: 'llm-failed' }
+      pushHistory(work, { at, event: 'failed', summary: `model call failed after ${attempts} retries: ${line}` })
+      changed = true
+      void notifyFailure(work, line).catch((error) => {
+        rt.warn('ds-bot: the failure of work %s was not reported: %s', id, error)
+        noteFault('delivery')
+        save()
+      })
+    }
+    if (changed) save()
+    return changed
+  }
+
   // The stalled task goes back to the Bot that held it, under the same work. The
   // request is named by the work, so a sweep that runs again — in this run or after a
   // restart, with or without the stall mark — finds its receipt and never runs the
@@ -1336,5 +1373,5 @@ export function install(rt) {
     return () => clearInterval(timer)
   }, 'ds-bot: nudge a chain that stopped')
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, sweepResume, resumePolicy, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, recordProposal, approveProposal, noteWorkTurn, noteFault, workStats, workHistory, workHealth, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, replyDelivery, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork, runningWorks, noteEtaAction, recordEscalation, etaTargetOf, etaAdvice: id => escalationAdvice(works()[id]), etaAudit: () => etaAuditLog(), resumeAudit: () => resumeLog(), noteWorkHalt })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, sweepResume, resumePolicy, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, recordProposal, approveProposal, noteWorkTurn, noteFault, workStats, workHistory, workHealth, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, replyDelivery, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork, runningWorks, noteEtaAction, recordEscalation, etaTargetOf, etaAdvice: id => escalationAdvice(works()[id]), etaAudit: () => etaAuditLog(), resumeAudit: () => resumeLog(), noteWorkHalt, failWorkOf })
 }

@@ -39,6 +39,7 @@ export function install(rt) {
     // The host nudged the owner of a work that stopped with it still open: it is a
     // message to act on, not a request, so the turn that reads it owes no answer.
     if (role === 'work-continue') return '[Your work is still open — continue it]'
+    if (role === 'work-failed') return `[A work you handed on to ${fromName} could not be answered]`
     // A Bot held up by an approval: the Bot that handed the work on hears it is blocked,
     // and the Bot that was refused hears what to do next.
     if (role === 'approval') return `[${fromName} is blocked on an approval]`
