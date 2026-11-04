@@ -233,6 +233,11 @@ function useFileMentions({ node, openFile, fileMentions, useTurnData }) {
   }, [fileMentions, openFile, seq, tail, turn])
 }
 
+// A step streaming reasoning with no reply text yet is the running indicator itself:
+// the activity row steps aside instead of repeating a fixed phrase over the text.
+export const reasoningNote = ({ hidden, running, reasoning, texts }) =>
+  !hidden && running && reasoning !== '' && texts.length === 0 ? { reasoning: true } : null
+
 export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, useTurnData, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
   const roster = useRoster(value => value)
   const data = node.data
@@ -255,6 +260,7 @@ export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentio
     : Math.max(1000, data.finalNode.time - data.time)
   // A streaming reply stands in for the activity row.
   useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts.length > 0 ? { text: true } : null)
+  useLiveNote(actions, sessionId, `reasoning:${node.key ?? data.seq}`, reasoningNote({ hidden, running, reasoning, texts }))
   if (hidden) return h(CellEmpty)
   // A relay spliced mid-turn is a 'context' node, hidden from the chat flow on
   // DSH 0.2; the step that answers it shows the event line where it was read,

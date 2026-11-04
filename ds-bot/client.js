@@ -8769,6 +8769,7 @@ function useFileMentions({ node, openFile, fileMentions, useTurnData }) {
     return tail?.closing?.finalNode.seq === seq ? fileMentions({ turn, seq, openFile }) : void 0;
   }, [fileMentions, openFile, seq, tail, turn]);
 }
+var reasoningNote = ({ hidden, running, reasoning, texts: texts2 }) => !hidden && running && reasoning !== "" && texts2.length === 0 ? { reasoning: true } : null;
 function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, useTurnData, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
   const roster = useRoster((value) => value);
   const data = node.data;
@@ -8784,6 +8785,7 @@ function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, use
   const thinking = reasoning === "" ? void 0 : thinkingStep(members);
   const ms = reasoning === "" || running || data.finalNode?.time === void 0 || data.time === void 0 ? void 0 : Math.max(1e3, data.finalNode.time - data.time);
   useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts2.length > 0 ? { text: true } : null);
+  useLiveNote(actions, sessionId, `reasoning:${node.key ?? data.seq}`, reasoningNote({ hidden, running, reasoning, texts: texts2 }));
   if (hidden) return (0, import_react19.createElement)(CellEmpty);
   const relays = relayPart(data, groupPart) ? relaysBefore(contexts, steps, data) : [];
   if (texts2.length === 0 && !reasoning && relays.length === 0) return (0, import_react19.createElement)(CellEmpty);
@@ -9671,6 +9673,7 @@ var toolLabel = (tool) => {
   if (tool.label === void 0 || tool.label === null || tool.target === void 0 || tool.target === "") return tool.label;
   return `${tool.label} · ${tool.target}`;
 };
+var toolEntries = (entries2) => entries2.filter((entry) => !entry.text && !entry.reasoning);
 var rowVisible = ({ running, streaming, tools, relaying, bot, room: room2 }) => running && (!streaming || tools.length > 0) && !relaying && (bot !== void 0 || room2 !== void 0);
 var freshInputAt = (submissions, steeredAt) => Math.max(
   0,
@@ -9777,8 +9780,8 @@ function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, us
     return entry?.switching === true && entry.folder === true && entry.roomId === void 0 ? entry.since : 0;
   }) ?? 0;
   const entries2 = (0, import_react20.useMemo)(() => Object.values(JSON.parse(liveKey)), [liveKey]);
-  const streaming = entries2.some((entry) => entry.text);
-  const tools = entries2.filter((entry) => !entry.text).sort((a, b) => a.at - b.at);
+  const streaming = entries2.some((entry) => entry.text || entry.reasoning);
+  const tools = toolEntries(entries2).sort((a, b) => a.at - b.at);
   const relaying = tools.some((entry) => entry.relay);
   const visible = moveAt !== 0 || rowVisible({ running, streaming, tools, relaying, bot, room: room2 });
   const tool = tools.at(-1);

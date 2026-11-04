@@ -115,9 +115,10 @@ test('a Bot reply in its own chat stays whole up to 20,000 characters', () => {
   assert.equal(reply('w'.repeat(25_000)), 'w'.repeat(600))
 })
 
-// #465: the thinking row stays a switchable extra, and the one activity row is
-// never given up to it.
-test('the thinking row shows only with its switch on, and the activity row is never yielded to it', () => {
+// #465 made the thinking row a switchable extra that never took the activity row.
+// A running step that already streams its reasoning now hands the row over instead:
+// the phrase would only repeat "thinking" over the thinking itself.
+test('the thinking row shows with its switch on and takes the activity row while it streams', () => {
   const cell = (prefs, blocks, steps) => {
     effects.length = 0
     const noted = []
@@ -136,11 +137,10 @@ test('the thinking row shows only with its switch on, and the activity row is ne
   const off = cell({}, reason, [thinking])
   assert.equal(off.out?.type, CellEmpty)
   assert.deepEqual(off.noted, [])
-  // On: the live row shows — and still notes nothing, so the activity row stays.
+  // On: the live row shows, and the transcript tells the activity row to step aside.
   const on = cell({ thinking: true }, reason, [thinking])
   assert.equal(find(on.out, node => node.type === ThinkingRow).length, 1)
-  assert.equal(on.noted.filter(id => id.startsWith('think:')).length, 0)
-  assert.deepEqual(on.noted, [])
+  assert.deepEqual(on.noted, ['reasoning:n10'])
   // A reply streaming in does give the activity row its one note, on or off.
   const replying = { turn: 3, step: 1, status: 'running', blocks: [{ kind: 'reasoning', text: 'Weighing it' }, { kind: 'text', text: 'Done' }] }
   for (const prefs of [{}, { thinking: true }]) {
