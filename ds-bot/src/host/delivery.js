@@ -36,6 +36,9 @@ export function install(rt) {
     // and the turn that reads this owes no answer to the Bot that is behind.
     if (role === 'eta') return `[A work you handed on to ${fromName} is behind its estimate]`
     if (role === 'eta-late') return `[A work you handed on to ${fromName} is far past its estimate]`
+    // The host nudged the owner of a work that stopped with it still open: it is a
+    // message to act on, not a request, so the turn that reads it owes no answer.
+    if (role === 'work-continue') return '[Your work is still open — continue it]'
     // A Bot held up by an approval: the Bot that handed the work on hears it is blocked,
     // and the Bot that was refused hears what to do next.
     if (role === 'approval') return `[${fromName} is blocked on an approval]`

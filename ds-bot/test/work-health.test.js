@@ -163,7 +163,7 @@ test('a stall dismissed before the cleanup existed is cleared by the next sweep'
   rt.openWork('parent', { from: 'a', to: 'b' })
   rt.openWork('child', { from: 'b', to: 'a', parent: 'parent' })
   rt.state.works.child.lease = { at, by: 'a' }
-  rt.reportWork('parent', { state: 'blocked', summary: 'no progress for 40 min' })
+  rt.reportWork('parent', { state: 'blocked', summary: 'no progress for 40 min', next: 'Chief decides' })
   rt.state.works.parent.report.stalled = true
   rt.state.works.parent.stalled = { at, action: 'notify' }
   rt.state.dismissed['blocked:parent'] = at
@@ -188,7 +188,7 @@ test('a work that is still running is hidden, never dropped', async (t) => {
   // that work is still out.
   rt.openWork('parent', { from: 'a', to: 'b' })
   rt.openWork('child', { from: 'b', to: 'a', parent: 'parent' })
-  rt.reportWork('parent', { state: 'blocked', summary: 'no progress for 40 min' })
+  rt.reportWork('parent', { state: 'blocked', summary: 'no progress for 40 min', next: 'Chief decides' })
   rt.state.works.parent.report.stalled = true
   rt.state.works.parent.stalled = { at: Date.now(), action: 'notify' }
   assert.equal(rt.workHealth().stalled, 1)

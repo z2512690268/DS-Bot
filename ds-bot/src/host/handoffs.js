@@ -8,9 +8,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { MESSAGE_INLINE_MAX, TEXT_KEPT, WORK_LOG_MAX } from './constants.js'
+import { MESSAGE_INLINE_MAX, STEER_CUT, TEXT_KEPT, WORK_LOG_MAX } from './constants.js'
 import { headOf } from './text.js'
-import { etaDeviation, etaView, jobInProgress, leasePolicyOf, normalizeReport, parseEta, proactiveOf, reportLine, stalledReport, waitsForUser, workStateOf } from './work-state.js'
+import { etaDeviation, etaView, jobInProgress, leasePolicyOf, normalizeReport, parseEta, proactiveOf, reportLine, resumeOpen, resumePolicyOf, stalledReport, waitsForUser, workStateOf } from './work-state.js'
 
 const minutes = since => {
   const count = Math.floor((Date.now() - since) / 60_000)
@@ -51,6 +51,8 @@ export function install(rt) {
       // The estimate it carried, whether the team reminded its owner, and how it ended:
       // the three facts a later question about an overrun needs.
       ...(work.eta === undefined ? {} : { eta: { minutes: work.eta.minutes, text: work.eta.text, reminded: work.eta.reminded ?? [], ...(work.escalation === undefined ? {} : { escalation: { kind: work.escalation.kind, to: work.escalation.to, temporary: work.escalation.temporary === true, restored: work.escalation.restored === true } }) } }),
+      // How often the host had to nudge the owner along, and whether it gave up.
+      ...(work.resume === undefined ? {} : { resume: { attempts: work.resume.attempts ?? 0, ...(work.resume.gaveUp === true ? { gaveUp: true } : {}) } }),
       ...(work.escalation === undefined ? {} : { escalated: true }),
       history: [...(work.history ?? []), { at: closedAt, event: 'closed', final: work.report?.state ?? fallback }].slice(-HISTORY_MAX),
     })
@@ -678,15 +680,26 @@ export function install(rt) {
     if (work === undefined) return { error: 'This turn is not answering a request, so there is no work to report on.' }
     const { report, error } = normalizeReport(input)
     if (error !== undefined) return { error }
+    // A work that goes on into another Bot's work does not end here: its report has to
+    // say what happens next and who does it, or it reads as finished and the chain stops.
+    const chained = work.parent !== undefined && works()[work.parent] !== undefined
+    if (chained && (report.state === 'ready' || report.state === 'blocked') && report.next === undefined) {
+      return { error: 'This work goes on into another Bot\'s work, so its report has to say the next step: call report again with next — what happens next and who does it. Without a next step it does not count as finished.' }
+    }
     if (report.state === 'progress') {
       work.progress = report
       // The stalled mark is the host's guess; the owner reporting progress replaces it.
       if (work.report?.stalled === true) delete work.report
     } else work.report = report
     // A report is the owner saying it is still there: the lease moves with it, and a
-    // later silence is a new stall that is worth reporting again.
+    // later silence is a new stall that is worth reporting again. A stop the user asked
+    // for is answered the same way: the owner speaking again lifts it.
     work.lease = { at: report.at, by: work.to }
     delete work.stalled
+    delete work.halted
+    // The attempt counter belongs to the stretch between reports: a work that reported
+    // progress starts the nudge budget again.
+    if (report.state === 'progress') delete work.resume
     pushHistory(work, { at: report.at, event: report.state, ...(report.summary === undefined ? {} : { summary: report.summary }) })
     save()
     return { report }
@@ -881,7 +894,11 @@ export function install(rt) {
   async function notifyStall(work, report) {
     if (work.from === undefined || work.to === undefined || rt.botOf(work.from) === undefined) return
     const min = silenceOf(work, report)
-    const text = `The work you handed on to ${nameOf(work.to)} did not report for ${min} min, so it is marked stalled. It may still be running. Decide what to do with it: do it yourself, hand it to another Bot, or tell the user. If it answers, its answer still reaches you.`
+    // A chain the host nudged for ever is a different fact from a silent lease: the Bot
+    // was asked to continue and did not.
+    const text = report.reason === 'no_continue'
+      ? `The work you handed on to ${nameOf(work.to)} is still open after ${report.attempts ?? 'a few'} continue attempts, so it is marked stalled. Decide what to do with it: nudge it again, take it over, or hand it to another Bot. If it answers, its answer still reaches you.`
+      : `The work you handed on to ${nameOf(work.to)} did not report for ${min} min, so it is marked stalled. It may still be running. Decide what to do with it: do it yourself, hand it to another Bot, or tell the user. If it answers, its answer still reaches you.`
     await rt.deliver({ fromId: work.to, toId: work.from, role: 'stalled', text })
   }
 
@@ -1189,5 +1206,135 @@ export function install(rt) {
     return () => clearInterval(timer)
   }, 'ds-bot: mark work that stopped reporting')
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, recordProposal, approveProposal, noteWorkTurn, noteFault, workStats, workHistory, workHealth, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, replyDelivery, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork, runningWorks, noteEtaAction, recordEscalation, etaTargetOf, etaAdvice: id => escalationAdvice(works()[id]), etaAudit: () => etaAuditLog() })
+  // --- Keeping a chain alive --------------------------------------------------------
+  //
+  // A Bot that ends its turn with its work still open and nothing running leaves the
+  // chain stopped until someone writes to it. The host nudges it instead: one input
+  // that says what is still open, how many attempts were made and what to do, once
+  // every `after` seconds and `max` times. After that the work is marked stalled and
+  // the Bot that asked is told. The counters live on the work, so a restart does not
+  // forget a chain that was waiting.
+  const resumePolicy = resumePolicyOf(rt.config)
+  const RESUME_AUDIT_MAX = 200
+  const resumeLog = () => (state.resumeAudit ??= [])
+  function recordResume(entry) {
+    resumeLog().push({ at: Date.now(), ...entry })
+    if (resumeLog().length > RESUME_AUDIT_MAX) resumeLog().splice(0, resumeLog().length - RESUME_AUDIT_MAX)
+    save()
+  }
+
+  // What the owner did last, in one sentence, so the nudge is about this work and not a
+  // generic "keep going".
+  function lastStepOf(work) {
+    const history = work.history ?? []
+    for (let at = history.length - 1; at >= 0; at--) {
+      const event = history[at]
+      if (event.event === 'progress' && event.summary !== undefined) return `The last progress it reported: ${event.summary}.`
+      if (event.event === 'escalated') return 'The Bot was already raised to a higher thinking level or model for it.'
+      if (event.event === 'stalled') return 'It had stopped reporting before.'
+    }
+    const back = (work.results ?? []).at(-1)
+    if (back !== undefined) return `Sub-work it handed on (${back.name}) has come back.`
+    return 'It has not reported anything about it yet.'
+  }
+
+  async function notifyContinue(id, work, attempt) {
+    const text = `Your work ${id} is still open (${workStateOf(work).state}), attempt ${attempt} of ${resumePolicy.max}. ${lastStepOf(work)} Continue from where you stopped instead of waiting for a new message: finish it and call report ready, or call report failed / blocked with what stops it. If it is still open after the last attempt, it is marked stalled and the Bot that asked for it is told.`
+    await rt.deliver({ fromId: work.from, toId: work.to, role: 'work-continue', text })
+  }
+
+  // One pass over every open work: schedule the first nudge, wait out a running turn or
+  // a live job, nudge when the owner is free, and give up after the last attempt.
+  function sweepResume(at = Date.now()) {
+    rt.sampleJobs?.(at)
+    let changed = false
+    const defer = (work, until) => {
+      if (work.resume?.nextAt === until) return
+      work.resume = { ...work.resume, nextAt: until }
+      changed = true
+    }
+    for (const [id, work] of Object.entries(works())) {
+      const open = resumeOpen(work, at)
+      if (open === undefined || open.gaveUp) continue
+      if (open.attempts >= resumePolicy.max) {
+        // Out of attempts: the chain is not moving, so it is stalled for the Bot that
+        // asked rather than being nudged for ever.
+        work.resume = { attempts: open.attempts, nextAt: at, gaveUp: true, at }
+        const report = { state: 'blocked', summary: `still open after ${open.attempts} continue attempts`, at, stalled: true, reason: 'no_continue', attempts: open.attempts }
+        work.report = report
+        work.stalled = { at, action: 'continue' }
+        pushHistory(work, { at, event: 'resume-gave-up', attempts: open.attempts })
+        recordResume({ work: id, bot: nameOf(work.to), kind: 'gave-up', attempts: open.attempts, max: resumePolicy.max })
+        changed = true
+        void notifyStall(work, report).catch((error) => {
+          rt.warn('ds-bot: the stalled work %s was not reported: %s', id, error)
+          delete work.stalled
+          noteFault('delivery')
+          save()
+        })
+        continue
+      }
+      const nextAt = open.nextAt ?? (work.at ?? at) + resumePolicy.after
+      if (at < nextAt) {
+        if (open.nextAt === undefined) defer(work, nextAt)
+        continue
+      }
+      const chat = rt.chatOf(work.to)
+      // A running turn is the owner working, and a live job may wake it when it
+      // settles: neither is a stopped chain, so the clock moves on instead of nudging.
+      if (chat !== undefined && rt.live.get(chat)?.turn !== undefined) { defer(work, at + resumePolicy.after); continue }
+      const jobs = rt.liveJobsOf?.(work.to) ?? []
+      if (jobs.some(job => jobInProgress(job, at))) { defer(work, at + resumePolicy.after); continue }
+      const attempt = open.attempts + 1
+      work.resume = { attempts: attempt, at, nextAt: at + resumePolicy.after }
+      pushHistory(work, { at, event: 'resumed', attempt })
+      recordResume({ work: id, bot: nameOf(work.to), kind: 'continue', attempt, max: resumePolicy.max })
+      changed = true
+      void notifyContinue(id, work, attempt).catch((error) => {
+        // It was not delivered, so the attempt does not count: the next pass tries again.
+        rt.warn('ds-bot: work %s was not nudged along: %s', id, error)
+        work.resume = { attempts: attempt - 1, nextAt: at }
+        noteFault('delivery')
+        save()
+      })
+    }
+    if (changed) save()
+    return changed
+  }
+
+  // The user or a Main Bot stopped this Bot's turn: the chain is theirs to restart, so
+  // the nudge does not bring it back. A report from the owner clears the mark.
+  function noteWorkHalt(botId, reason = 'stopped') {
+    if (botId === undefined) return false
+    const at = Date.now()
+    let halted = 0
+    for (const work of Object.values(works())) {
+      if (work.to !== botId || work.halted !== undefined) continue
+      if (waitsForUser(workStateOf(work, at).state)) continue
+      work.halted = { at, reason: String(reason).slice(0, 100) }
+      pushHistory(work, { at, event: 'halted' })
+      halted += 1
+    }
+    if (halted === 0) return false
+    recordResume({ kind: 'halted', bot: nameOf(botId), reason, works: halted })
+    save()
+    return true
+  }
+
+  // A steer cut keeps the turn's work and goes on in the next turn, so it is not a stop.
+  rt.ctx?.on?.('session/event', (session, event) => {
+    if (event?.type !== 'turn/end') return
+    const reason = event.data?.reason
+    if (reason?.kind !== 'aborted') return
+    if (reason.reason?.reason === STEER_CUT) return
+    noteWorkHalt(rt.selfOf(session?.id), reason.reason?.reason ?? reason.reason?.kind ?? 'stopped')
+  })
+
+  rt.ctx?.effect?.(() => {
+    const timer = setInterval(() => sweepResume(), 5_000)
+    timer.unref?.()
+    return () => clearInterval(timer)
+  }, 'ds-bot: nudge a chain that stopped')
+
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, sweepResume, resumePolicy, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, recordProposal, approveProposal, noteWorkTurn, noteFault, workStats, workHistory, workHealth, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, replyDelivery, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork, runningWorks, noteEtaAction, recordEscalation, etaTargetOf, etaAdvice: id => escalationAdvice(works()[id]), etaAudit: () => etaAuditLog(), resumeAudit: () => resumeLog(), noteWorkHalt })
 }

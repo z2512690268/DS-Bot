@@ -310,7 +310,7 @@ export function install(rt) {
 
   rt.teamTools.push(defineTool({
     name: 'report',
-    description: 'Report on the request you are answering, while you work on it or before you finish it: what you concluded, and whether a user has to do something. "progress" leaves the work open and stays out of your answer; "ready", "blocked", "failed" and "dropped" go up with your answer, so the Bot that asked reads the outcome before the detail. A turn that ends without a report counts as ready.',
+    description: 'Report on the request you are answering, while you work on it or before you finish it: what you concluded, and whether a user has to do something. "progress" leaves the work open and stays out of your answer; "ready", "blocked", "failed" and "dropped" go up with your answer, so the Bot that asked reads the outcome before the detail. When the work goes on into another Bot\'s work, a ready or blocked report must also say the next step: what happens next and who does it. A turn that ends without a report counts as ready.',
     parameters: {
       state: {
         type: 'string',
@@ -324,6 +324,10 @@ export function install(rt) {
         type: 'array',
         description: 'Two to four short answers the user may pick, in the language the user writes, when the decision has clear choices. The card shows them as buttons; the user can still write their own. Only with human_action.',
         items: { type: 'string' },
+      },
+      next: {
+        type: 'string',
+        description: 'The next step when this work does not end here: what happens next and who does it, in one sentence. Required for ready and blocked when the work goes on into another Bot\'s work, because without it the chain reads as finished.',
       },
     },
     output,

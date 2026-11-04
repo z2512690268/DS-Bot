@@ -231,3 +231,24 @@ test('needsYou is the one list of what waits for the user', async (t) => {
   assert.equal(asked.question, '选哪个方向？')
   assert.equal(asked.bot, 'Writer')
 })
+
+test('a report on a work that goes on into another Bot\'s work says the next step', async (t) => {
+  const { rt } = await bench(t).start()
+  rt.openWork('parent', { from: 'a', to: 'b' })
+  rt.openWork('child', { from: 'b', to: 'a', parent: 'parent' })
+  // The chain does not end here: without a next step, ready would read as finished.
+  const refused = rt.reportWork('child', { state: 'ready', summary: 'the draft is done' })
+  assert.match(refused.error, /next/)
+  assert.equal(rt.state.works.child.report, undefined)
+  const refusedBlocked = rt.reportWork('child', { state: 'blocked', summary: 'needs a key' })
+  assert.match(refusedBlocked.error, /next/)
+  // With it, the outcome and what happens next travel up together.
+  const kept = rt.reportWork('child', { state: 'ready', summary: 'the draft is done', next: 'Chief sends it to the user' })
+  assert.equal(kept.report.next, 'Chief sends it to the user')
+  assert.match(reportLine(kept.report), /next: Chief sends it to the user/)
+  assert.equal(rt.answerText('child', 'Done.', 'Chief'), '[reported ready: the draft is done]\nnext: Chief sends it to the user\n\nDone.')
+  // A top-level work ends where it is.
+  rt.openWork('top', { from: 'a', to: 'b' })
+  assert.equal(rt.reportWork('top', { state: 'ready', summary: 'done' }).report.state, 'ready')
+  assert.equal(rt.reportWork('top', { state: 'failed', summary: 'cannot' }).report.next, undefined)
+})

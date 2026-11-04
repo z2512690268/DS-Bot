@@ -50,6 +50,8 @@ test('apply registers listeners and effects in a fixed order', (t) => {
     'on session/event',
     'effect ds-bot: mark work that stopped reporting',
     'on session/event',
+    'effect ds-bot: nudge a chain that stopped',
+    'on session/event',
     'effect ds-bot: check the Main Bot turn time',
     'tools guard',
     'on tools/execute',

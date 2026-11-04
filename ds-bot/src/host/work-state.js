@@ -101,9 +101,11 @@ export const proactiveOf = (config = {}) => (PROACTIVE_MODES.includes(config.pro
 export function reportLine(report) {
   if (report === undefined) return ''
   const summary = String(report.summary ?? '').trim()
+  const next = String(report.next ?? '').trim()
   const head = summary === '' ? report.state : `${report.state}: ${summary}`
   const ask = String(report.humanAction ?? '').trim()
-  return `[reported ${head}]${ask === '' ? '' : `\n${ask}`}`
+  const after = next === '' ? '' : `\nnext: ${next}`
+  return `[reported ${head}]${after}${ask === '' ? '' : `\n${ask}`}`
 }
 
 /**
@@ -115,6 +117,7 @@ export function normalizeReport(input = {}, at = Date.now()) {
   if (state === undefined) return { error: `A report is one of ${REPORT_STATES.join(', ')}.` }
   const summary = String(input.summary ?? '').replace(/\s+/g, ' ').trim().slice(0, 500)
   const humanAction = String(input.human_action ?? '').replace(/\s+/g, ' ').trim().slice(0, 500)
+  const next = String(input.next ?? '').replace(/\s+/g, ' ').trim().slice(0, 300)
   const asked = Array.isArray(input.human_options) ? input.human_options : []
   const humanOptions = [...new Set(asked
     .map(option => String(typeof option === 'string' ? option : option?.label ?? '').replace(/\s+/g, ' ').trim())
@@ -125,6 +128,7 @@ export function normalizeReport(input = {}, at = Date.now()) {
       ...(summary === '' ? {} : { summary }),
       ...(humanAction === '' ? {} : { humanAction }),
       ...(humanAction !== '' && humanOptions.length > 0 ? { humanOptions } : {}),
+      ...(next === '' ? {} : { next }),
       at,
     },
   }
@@ -269,4 +273,37 @@ export function stalledReport(work, at = Date.now(), deadline = STALL_MS) {
   if (at - since < deadline) return undefined
   const min = Math.max(1, Math.round((at - since) / 60_000))
   return { state: 'blocked', summary: `no progress for ${min} min`, at, stalled: true, reason: 'no_progress' }
+}
+
+// A chain stops when a Bot ends its turn with its work still open and nothing running:
+// the work waits for a message nobody sends. The host nudges the owner itself, once
+// every `after` seconds, `max` times; after that the work is marked stalled and the Bot
+// that asked is told. The counters live on the work, so a restart picks the chain up.
+export const RESUME_SECONDS = 30
+export const RESUME_MAX = 3
+
+/** The nudge policy this team runs: the constants above, overridden by plugin config. */
+export function resumePolicyOf(config = {}) {
+  const seconds = Number(config.workResumeSeconds)
+  const times = Number(config.workResumeMax)
+  return {
+    after: (Number.isFinite(seconds) && seconds > 0 ? seconds : RESUME_SECONDS) * 1000,
+    max: Number.isFinite(times) && times > 0 ? Math.floor(times) : RESUME_MAX,
+  }
+}
+
+/**
+ * Whether a work may be nudged along, and how many times it already was: undefined when
+ * it may not — a proposal, an ended one, one the user stopped, one waiting for sub-work
+ * or for the user. Whether its owner is free (no running turn, no live job) is the
+ * caller's check, since only the host knows.
+ */
+export function resumeOpen(work, at = Date.now()) {
+  if (work === undefined || work.proposal !== undefined || work.to === undefined) return undefined
+  if (work.halted !== undefined) return undefined
+  // Waiting on sub-work is the chain going on by itself, not a stopped chain.
+  if ((work.open ?? []).length > 0) return undefined
+  if (waitsForUser(workStateOf(work, at).state)) return undefined
+  const resume = work.resume ?? {}
+  return { attempts: resume.attempts ?? 0, gaveUp: resume.gaveUp === true, nextAt: resume.nextAt }
 }
