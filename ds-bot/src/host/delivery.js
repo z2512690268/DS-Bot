@@ -36,10 +36,11 @@ export function install(rt) {
     // and the Bot that was refused hears what to do next.
     if (role === 'approval') return `[${fromName} is blocked on an approval]`
     if (role === 'approval-rejected') return '[Your approval request was rejected]'
-    // The host stopped the turn itself: it says so, and what to do instead. The soft
-    // check is not a stop: it is a question steered into the running turn.
+    // The host stopped the turn itself: it says so, and what to do instead. Soft and
+    // hard checks are not stops: they are steered into the running turn.
     if (role === 'gate') return '[DS Bot stopped this turn]'
     if (role === 'gate-soft') return '[A check on this turn]'
+    if (role === 'gate-hard') return '[A hard check on this turn]'
     if (role === 'room') return `[Group chat "${roomName}" · ${note}]`
     if (role === 'report') return `[Group chat "${roomName}" · replies to your post${goesOn}]`
     if (role === 'kickoff') return '[Bot team setup]'

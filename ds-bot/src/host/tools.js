@@ -226,7 +226,7 @@ export function install(rt) {
         if (refusal !== undefined) refuse(refusal)
         const send = async () => {
           const out = await callInGroup(exec, room, sender, target, text.trim())
-          rt.noteDispatch?.(exec.agent?.id, { works: 0 })
+          rt.noteDispatch?.(exec.agent?.id, { works: 0, target: target.name })
           return out
         }
         return request === undefined ? await send() : answer(await rt.admitRequest(request, send))
@@ -278,7 +278,7 @@ export function install(rt) {
           rt.noteFault?.('delivery')
           throw error
         }
-        rt.noteDispatch?.(exec.agent?.id, { works: !toUser && !joins ? 1 : 0 })
+        rt.noteDispatch?.(exec.agent?.id, { works: !toUser && !joins ? 1 : 0, target: target.name })
         const sent = toUser
           ? `Delivered to ${target.name}. It will answer the user in its own chat; nothing comes back to you, so point the user to ${target.name}'s chat instead of relaying.`
           : working && steer
@@ -424,6 +424,7 @@ export function install(rt) {
         const fallback = [state.prefs.defaultBotModel, creator?.model].find(ref => ref && served.has(ref))
         const model = args.model || fallback
         const bot = await rt.createBot({ ...args, avatar: avatar === undefined ? undefined : { image: avatar }, model, workDir, effort: args.effort, createdBy: creator?.id })
+        rt.noteDispatch?.(exec.agent?.id, { works: 0, target: bot.name })
         return `Created ${bot.name}${workDir ? `, working in ${workDir}` : ''}. It is greeting the user now.`
       } catch (error) {
         return `Could not create the Bot: ${error.message}`
@@ -718,7 +719,7 @@ export function install(rt) {
         if (sub !== undefined) rt.dropWork(sub)
         return `Could not post in "${room.name}": ${failure.message}`
       }
-      rt.noteDispatch?.(exec.agent?.id, { works: sub === undefined ? 0 : 1 })
+      rt.noteDispatch?.(exec.agent?.id, { works: sub === undefined ? 0 : 1, target: room.name })
       if (member && named.length === 0) return `Posted in "${room.name}", where the user and its members read it. Nobody answers it: your post only calls the members you name with @Name.`
       if (named.length > 0) {
         const turn = turnOf(exec)

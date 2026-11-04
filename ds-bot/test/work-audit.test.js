@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import { createRuntime } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 import { mainGateOf } from '../src/host/work-state.js'
-import { WORK_GATE, toolTargetOf } from '../src/host/work-audit.js'
+import { HARD_REFUSAL, WORK_GATE, toolTargetOf } from '../src/host/work-audit.js'
 
 const seed = () => ({
   version: 1,
@@ -111,6 +111,15 @@ function toolCall(host, sessionId, at, name = 'bash', args = {}) {
 const agentAt = (host, id) => host.agents.get(host.rt.chatOf(id))
 const cancelledAt = (host, id) => agentAt(host, id)?.cancelled ?? []
 const lastNotice = (host, id) => agentAt(host, id)?.calls.at(-1)
+// The host's tool guards run before a tool body; the hard-line guard is the one that
+// returns a refusal for a Main Bot in dispatch-only mode.
+const guardReason = (host, name, sessionId = 'a') => {
+  for (const guard of host.ctx.guards) {
+    const reason = guard({ agent: { id: sessionId }, name })
+    if (reason !== undefined) return reason
+  }
+  return undefined
+}
 
 test('the repeat target is the host, path or service a call names', () => {
   assert.equal(toolTargetOf('bash', { command: 'ssh root@gpu1 uptime' }), 'host:gpu1')
@@ -149,6 +158,7 @@ test('the soft line steers a reflection into the running turn and does not stop 
   assert.match(textOf(notice[1]), /running 45 sec/)
   assert.match(textOf(notice[1]), /2 tool calls/)
   assert.match(textOf(notice[1]), /hand it on, narrow it, or call keep_working/)
+  assert.equal(guardReason(host, 'bash'), undefined, 'the soft line does not restrict tools')
   // It is asked once, not on every sweep.
   const before = agentAt(host, 'a').calls.length
   assert.equal(host.rt.sweepWorkGate(), false)
@@ -165,7 +175,7 @@ test('the soft line steers a reflection into the running turn and does not stop 
   assert.match(entry.gates[0].text, /running 45 sec/)
 })
 
-test('the hard line stops the turn and tells the Bot how to answer the user', async (t) => {
+test('the hard line turns the turn into dispatch-only instead of ending it', async (t) => {
   const host = await bench(t).start()
   let clock = 0
   host.rt.monotonicNow = () => clock
@@ -174,43 +184,51 @@ test('the hard line stops the turn and tells the Bot how to answer the user', as
   clock = 120_000 + 1
   assert.equal(host.rt.sweepWorkGate(), true)
   await settle()
-  assert.deepEqual(cancelledAt(host, 'a'), [{ kind: 'hook', reason: WORK_GATE }])
+  assert.deepEqual(cancelledAt(host, 'a'), [], 'the turn is not stopped')
   const notice = lastNotice(host, 'a')
-  assert.equal(notice[0], 'followup')
-  assert.match(textOf(notice[1]), /^\[DS Bot stopped this turn\]/)
-  assert.match(textOf(notice[1]), /passed 120 sec and was stopped/)
-  assert.match(textOf(notice[1]), /keep_working/)
-  assert.match(textOf(notice[1]), /已停手，等你指令/)
-  host.emit('a', 'turn/end', { turn: 1, reason: { kind: 'aborted' } })
+  assert.equal(notice[0], 'steer', 'the hard notice is steered into the running turn')
+  assert.match(textOf(notice[1]), /^\[A hard check on this turn\]/)
+  assert.match(textOf(notice[1]), /Only message_bot, post_to_group, create_bot and keep_working/)
+  assert.match(textOf(notice[1]), /say who you gave it to/)
+  assert.equal(guardReason(host, 'bash'), HARD_REFUSAL)
+  assert.equal(guardReason(host, 'read'), HARD_REFUSAL)
+  assert.equal(guardReason(host, 'message_bot'), undefined)
+  assert.equal(guardReason(host, 'post_to_group'), undefined)
+  assert.equal(guardReason(host, 'create_bot'), undefined)
+  assert.equal(guardReason(host, 'keep_working'), undefined)
+  host.emit('a', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   const entry = host.rt.state.mainTurns.at(-1)
-  assert.equal(entry.gated, true)
-  assert.equal(entry.gates.length, 1)
-  assert.equal(entry.gates[0].gate, 'hard')
-  assert.equal(entry.gates[0].seconds, 120)
-  assert.equal(entry.gates[0].limit, 120)
-  assert.equal(entry.gates[0].tools, 1)
-  assert.equal(entry.gates[0].dispatched, false)
-  assert.match(entry.gates[0].text, /已停手/)
+  assert.equal(entry.gated, undefined)
+  const hard = entry.gates.find(gate => gate.gate === 'hard')
+  assert.equal(hard.seconds, 120)
+  assert.equal(hard.limit, 120)
+  assert.equal(hard.tools, 1)
+  assert.equal(hard.dispatched, false)
+  assert.equal(hard.rejected, 2)
+  assert.equal(hard.outcome, 'ended')
 })
 
-test('the hard line interrupts a tool that has not returned yet', async (t) => {
+test('a successful hand-off lifts the hard line and is recorded with its target', async (t) => {
   const host = await bench(t).start()
   let clock = 0
   host.rt.monotonicNow = () => clock
   host.emit('a', 'turn/start', { turn: 1 })
-  host.emit('a', 'tool/call', { callId: 'slow', name: 'bash', arguments: JSON.stringify({ command: 'ssh gpu1 sleep 300' }) })
-  // No tool/result: the gate must not wait for the long command to return.
   clock = 120_000 + 1
-  assert.equal(host.rt.sweepWorkGate(), true)
+  host.rt.sweepWorkGate()
   await settle()
-  assert.deepEqual(cancelledAt(host, 'a'), [{ kind: 'hook', reason: WORK_GATE }])
-  host.emit('a', 'turn/end', { turn: 1, reason: { kind: 'aborted' } })
+  assert.equal(guardReason(host, 'bash'), HARD_REFUSAL)
+  assert.match(await host.tool('message_bot', { to: 'Writer', message: 'do it' }, 'a'), /Delivered to Writer/)
+  assert.equal(guardReason(host, 'bash'), undefined, 'the restriction is lifted')
+  host.emit('a', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   const entry = host.rt.state.mainTurns.at(-1)
-  assert.equal(entry.gates[0].gate, 'hard')
-  assert.equal(entry.gates[0].seconds, 120)
+  const hard = entry.gates.find(gate => gate.gate === 'hard')
+  assert.equal(hard.rejected, 1)
+  assert.equal(hard.outcome, 'dispatched')
+  assert.equal(hard.target, 'Writer')
+  assert.equal(entry.works, 1)
 })
 
-test('a turn that handed work on is still stopped at the hard line', async (t) => {
+test('a turn that handed work on before the hard line is still held', async (t) => {
   const host = await bench(t).start()
   let clock = 0
   host.rt.monotonicNow = () => clock
@@ -219,35 +237,17 @@ test('a turn that handed work on is still stopped at the hard line', async (t) =
   clock = 120_000 + 1
   assert.equal(host.rt.sweepWorkGate(), true)
   await settle()
-  assert.deepEqual(cancelledAt(host, 'a'), [{ kind: 'hook', reason: WORK_GATE }])
-  host.emit('a', 'turn/end', { turn: 1, reason: { kind: 'aborted' } })
-  const entry = host.rt.state.mainTurns.at(-1)
-  assert.equal(entry.works, 1)
-  assert.equal(entry.gates[0].gate, 'hard')
-  assert.equal(entry.gates[0].dispatched, true)
-})
-
-test('keep_working turns off the remaining time gates for the turn', async (t) => {
-  const host = await bench(t).start()
-  let clock = 0
-  host.rt.monotonicNow = () => clock
-  host.emit('a', 'turn/start', { turn: 1 })
-  clock = 45_000 + 1
-  host.rt.sweepWorkGate()
-  await settle()
-  assert.match(await host.tool('keep_working', { reason: '用户明确要求我直接查这台机器' }, 'a'), /Recorded/)
-  clock = 5 * 60_000
-  assert.equal(host.rt.sweepWorkGate(), false)
-  await settle()
+  assert.equal(guardReason(host, 'bash'), HARD_REFUSAL, 'an earlier hand-off does not exempt the turn')
   assert.deepEqual(cancelledAt(host, 'a'), [])
   host.emit('a', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   const entry = host.rt.state.mainTurns.at(-1)
-  assert.equal(entry.kept, '用户明确要求我直接查这台机器')
-  assert.equal(entry.gated, undefined)
-  assert.equal(entry.gates[0].gate, 'soft')
+  const hard = entry.gates.find(gate => gate.gate === 'hard')
+  assert.equal(hard.outcome, 'ended')
+  assert.equal(hard.rejected, 1)
+  assert.equal(entry.works, 1)
 })
 
-test('keep_working after a hard stop links its reason to the gate', async (t) => {
+test('keep_working lifts the hard line and records the reason', async (t) => {
   const host = await bench(t).start()
   let clock = 0
   host.rt.monotonicNow = () => clock
@@ -255,14 +255,34 @@ test('keep_working after a hard stop links its reason to the gate', async (t) =>
   clock = 120_000 + 1
   host.rt.sweepWorkGate()
   await settle()
-  host.emit('a', 'turn/end', { turn: 1, reason: { kind: 'aborted' } })
-  host.emit('a', 'turn/start', { turn: 2 })
+  assert.equal(guardReason(host, 'bash'), HARD_REFUSAL)
   assert.match(await host.tool('keep_working', { reason: '必须我继续' }, 'a'), /Recorded/)
-  host.emit('a', 'turn/end', { turn: 2, reason: { kind: 'completed' } })
-  const entries = host.rt.state.mainTurns
-  assert.equal(entries.at(-2).gated, true)
-  assert.equal(entries.at(-1).kept, '必须我继续')
-  assert.equal(entries.at(-1).keptFrom, 'hard')
+  assert.equal(guardReason(host, 'bash'), undefined, 'keep_working lifts the restriction')
+  host.emit('a', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  const entry = host.rt.state.mainTurns.at(-1)
+  const hard = entry.gates.find(gate => gate.gate === 'hard')
+  assert.equal(hard.outcome, 'keep_working')
+  assert.equal(hard.rejected, 1)
+  assert.equal(hard.kept, '必须我继续')
+  assert.equal(entry.kept, '必须我继续')
+})
+
+test('the hard line can fire while a tool is still pending', async (t) => {
+  const host = await bench(t).start()
+  let clock = 0
+  host.rt.monotonicNow = () => clock
+  host.emit('a', 'turn/start', { turn: 1 })
+  host.emit('a', 'tool/call', { callId: 'slow', name: 'bash', arguments: JSON.stringify({ command: 'ssh gpu1 sleep 300' }) })
+  // No tool/result yet: the timer still turns on dispatch-only mode, and the turn is
+  // not ended; the pending call finishes and the guard holds the next one.
+  clock = 120_000 + 1
+  assert.equal(host.rt.sweepWorkGate(), true)
+  await settle()
+  assert.deepEqual(cancelledAt(host, 'a'), [])
+  assert.equal(guardReason(host, 'bash'), HARD_REFUSAL)
+  host.emit('a', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  const entry = host.rt.state.mainTurns.at(-1)
+  assert.equal(entry.gates.find(gate => gate.gate === 'hard').rejected, 1)
 })
 
 test('the same tool on the same target stops at the fourth call', async (t) => {
@@ -297,11 +317,13 @@ test('the time thresholds are configurable', async (t) => {
   clock = 10_000
   assert.equal(host.rt.sweepWorkGate(), true)
   await settle()
+  assert.equal(guardReason(host, 'bash'), undefined, 'the soft line does not restrict')
   assert.deepEqual(cancelledAt(host, 'a'), [])
   clock = 20_000
   assert.equal(host.rt.sweepWorkGate(), true)
   await settle()
-  assert.deepEqual(cancelledAt(host, 'a'), [{ kind: 'hook', reason: WORK_GATE }])
+  assert.equal(guardReason(host, 'bash'), HARD_REFUSAL)
+  assert.deepEqual(cancelledAt(host, 'a'), [], 'the hard line does not stop the turn')
 })
 
 test('the repeat limit is configurable', async (t) => {
@@ -323,6 +345,7 @@ test('audit mode records the time gates without stopping; off records nothing', 
   assert.equal(auditHost.rt.sweepWorkGate(), true)
   await settle()
   assert.deepEqual(cancelledAt(auditHost, 'a'), [])
+  assert.equal(guardReason(auditHost, 'bash'), undefined, 'audit mode does not restrict tools')
   auditHost.emit('a', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   const audited = auditHost.rt.state.mainTurns.at(-1)
   assert.equal(audited.gated, undefined, 'audit mode does not stop')
@@ -347,6 +370,7 @@ test('another Bot is not time-gated, repeat-gated or audited', async (t) => {
   for (let at = 0; at < 6; at += 1) toolCall(host, 'b', at, 'bash', { command: 'ssh gpu1 uptime' })
   await settle()
   assert.deepEqual(cancelledAt(host, 'b'), [])
+  assert.equal(guardReason(host, 'bash', 'b'), undefined)
   host.emit('b', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   assert.equal(host.rt.state.mainTurns?.length ?? 0, 0)
   assert.deepEqual(host.rt.workAudit(), { turns: 0, alone: 0, works: 0, kept: 0 })
@@ -360,7 +384,8 @@ test('a group round the Main Bot talks in is gated the same way', async (t) => {
   host.rt.monotonicNow = () => 130_000
   assert.equal(host.rt.sweepWorkGate(), true)
   await settle()
-  assert.deepEqual(host.agents.get('ga')?.cancelled ?? [], [{ kind: 'hook', reason: WORK_GATE }])
+  assert.equal(guardReason(host, 'bash', 'ga'), HARD_REFUSAL)
+  assert.deepEqual(host.agents.get('ga')?.cancelled ?? [], [], 'the group turn is held, not stopped')
   host.rt.groupOwners.delete('ga')
 })
 

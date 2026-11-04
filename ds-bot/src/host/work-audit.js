@@ -23,6 +23,9 @@ const SWEEP_MS = 5_000
 const SHELL_TOOLS = new Set(['bash', 'pwsh', 'bash-persistent', 'pwsh-persistent'])
 const WRITE_TOOLS = new Set(['write', 'edit'])
 const DISPATCH_TOOLS = new Set(['message_bot', 'post_to_group', 'keep_working'])
+// While the hard line is on, only these four tools run; everything else is refused.
+const HARD_ALLOWED = new Set(['message_bot', 'post_to_group', 'create_bot', 'keep_working'])
+export const HARD_REFUSAL = '硬线已触发，先把活派出去，或 keep_working 说明理由'
 
 const textOf = value => String(value ?? '').trim()
 const stripQuotes = value => String(value ?? '').replace(/^['"]|['"]$/g, '')
@@ -153,7 +156,7 @@ export function install(rt) {
       return `This turn has been running ${secondsOf(gate.seconds)} sec and has made ${turn.tools} tool calls. Can this work be handed to a Bot? Can it be narrowed? Your next message must hand it on, narrow it, or call keep_working with the reason you must continue.`
     }
     if (gate.id === 'hard') {
-      return `This turn passed ${secondsOf(gate.seconds)} sec and was stopped. Hand the work to a Bot, or call keep_working with the reason you must continue.\nReply to the user with one sentence on where things stand and then exactly "已停手，等你指令"; do not explain further.`
+      return `Hard line: this turn has passed ${secondsOf(gate.seconds)} sec. Only message_bot, post_to_group, create_bot and keep_working can run now. Hand the work to a Bot and say who you gave it to, or call keep_working with the reason you must continue.`
     }
     return `This turn has called ${gate.tool} on ${gate.target} ${gate.count} times. That machine or thing already has a Bot responsible; hand the work back, or call keep_working with the reason you must do it yourself.`
   }
@@ -163,6 +166,7 @@ export function install(rt) {
       gate: gate.id,
       at: Date.now(),
       ...(gate.id === 'soft' || gate.id === 'hard' ? { seconds: Math.round(gate.seconds), limit: gate.id === 'soft' ? policy.softSeconds : policy.hardSeconds } : {}),
+      ...(gate.id === 'hard' ? { rejected: 0 } : {}),
       ...(gate.id === 'same-target' ? { threshold: gate.threshold, tool: gate.tool, target: gate.target, count: gate.count } : {}),
       tools: turn.tools,
       dispatched: turn.dispatched,
@@ -170,8 +174,9 @@ export function install(rt) {
     }
   }
 
-  // Stop the turn once. In audit mode the gate is recorded but nothing is delivered or
-  // cancelled; in enforce the notice goes to the Bot's next turn and the turn is cut.
+  // The same-target line stops the turn once. In audit mode the gate is recorded but
+  // nothing is delivered or cancelled; in enforce the notice goes to the next turn and
+  // the turn is cut.
   function stopTurn(sessionId, turn, gate) {
     const text = noticeOf(gate, turn)
     turn.gates.push(recordOf(gate, turn, text))
@@ -199,6 +204,26 @@ export function install(rt) {
     return true
   }
 
+  // The hard line does not end the turn: it turns on dispatch-only mode. A steer tells
+  // the model what may still run; the guard below refuses every other tool.
+  function enterHardLine(sessionId, turn, gate) {
+    const text = noticeOf(gate, turn)
+    turn.gates.push(recordOf(gate, turn, text))
+    turn.hardLine = true
+    if (policy.mode !== 'enforce') return true
+    turn.dispatchOnly = true
+    const botId = botOfSession(sessionId)
+    void (async () => {
+      if (turns.get(sessionId) !== turn || turn.dispatchOnly !== true) return
+      try {
+        await rt.deliver({ toId: botId, role: 'gate-hard', text, steer: true })
+      } catch (error) {
+        rt.warn('ds-bot: the hard-line notice to %s was not delivered: %s', botId, error)
+      }
+    })()
+    return true
+  }
+
   // The soft line does not stop the turn: it is steered into the running turn, so the
   // next model step sees it. It is sent once per turn.
   function remindSoft(sessionId, turn, gate) {
@@ -208,7 +233,7 @@ export function install(rt) {
     if (policy.mode !== 'enforce') return true
     const botId = botOfSession(sessionId)
     void (async () => {
-      if (turns.get(sessionId) !== turn || turn.gated) return
+      if (turns.get(sessionId) !== turn || turn.gated || turn.hardLine) return
       try {
         await rt.deliver({ toId: botId, role: 'gate-soft', text, steer: true })
       } catch (error) {
@@ -219,10 +244,10 @@ export function install(rt) {
   }
 
   function timeGateIfNeeded(sessionId, turn, at = now()) {
-    if (policy.mode === 'off' || turn.gated || turn.kept !== undefined) return false
+    if (policy.mode === 'off' || turn.gated || turn.kept !== undefined || turn.hardLine) return false
     if (!isMainSession(sessionId)) return false
     const seconds = secondsSince(turn, at)
-    if (seconds >= policy.hardSeconds) return stopTurn(sessionId, turn, { id: 'hard', seconds })
+    if (seconds >= policy.hardSeconds) return enterHardLine(sessionId, turn, { id: 'hard', seconds })
     if (!turn.softNotified && seconds >= policy.softSeconds) return remindSoft(sessionId, turn, { id: 'soft', seconds })
     return false
   }
@@ -242,7 +267,7 @@ export function install(rt) {
   function sweepWorkGate(at = now()) {
     let changed = false
     for (const [sessionId, turn] of turns) {
-      if (policy.mode === 'off' || turn.gated || turn.kept !== undefined) continue
+      if (policy.mode === 'off' || turn.gated || turn.kept !== undefined || turn.hardLine) continue
       if (timeGateIfNeeded(sessionId, turn, at)) changed = true
     }
     return changed
@@ -253,6 +278,15 @@ export function install(rt) {
     // A pure answer is not work: only turns that did something (or were checked) are
     // worth a line.
     if (turn.tools === 0 && turn.works === 0 && turn.kept === undefined && turn.gates.length === 0) return
+    // The hard line's outcome is known only when the turn ends: did it hand work on,
+    // say keep_working, or simply end? The rejected count is the calls the guard denied.
+    const hard = turn.gates.find(gate => gate.gate === 'hard')
+    if (hard !== undefined) {
+      hard.rejected = turn.rejected
+      hard.outcome = turn.hardOutcome ?? 'ended'
+      if (turn.hardTarget !== undefined) hard.target = turn.hardTarget
+      if (turn.kept !== undefined) hard.kept = turn.kept
+    }
     auditLog().push({
       at: turn.startedAtWall,
       ms: Math.max(0, now() - turn.startedAt),
@@ -286,11 +320,18 @@ export function install(rt) {
 
   // Work this turn handed to another Bot: a request, a post into a group, or a work it
   // opened for one. It marks the audit; it does not exempt the turn from the time gates.
-  function noteDispatch(sessionId, { works = 0 } = {}) {
+  function noteDispatch(sessionId, { works = 0, target } = {}) {
     const turn = turns.get(sessionId)
     if (turn === undefined) return
     turn.dispatched = true
     turn.works += works
+    // A successful hand-off lifts the hard line's dispatch-only state; the target is
+    // kept for the audit.
+    if (turn.dispatchOnly) {
+      turn.dispatchOnly = false
+      turn.hardOutcome = 'dispatched'
+      turn.hardTarget = target
+    }
   }
 
   // The explicit way out: the Main Bot says why this work must be its own, and every
@@ -303,6 +344,10 @@ export function install(rt) {
     const why = String(reason ?? '').replace(/\s+/g, ' ').trim()
     if (why === '') return { error: 'Give one sentence on why you must do this work yourself.' }
     turn.kept = why.slice(0, 300)
+    if (turn.dispatchOnly) {
+      turn.dispatchOnly = false
+      turn.hardOutcome = 'keep_working'
+    }
     if (turn.resumedFrom !== undefined) turn.keptFrom = turn.resumedFrom.gate
     return { kept: turn.kept }
   }
@@ -327,6 +372,11 @@ export function install(rt) {
           lastCall: undefined,
           gates: [],
           softNotified: false,
+          hardLine: false,
+          dispatchOnly: false,
+          rejected: 0,
+          hardOutcome: undefined,
+          hardTarget: undefined,
           kept: undefined,
           keptFrom: undefined,
           resumedFrom,
@@ -363,6 +413,19 @@ export function install(rt) {
     timer.unref?.()
     return () => clearInterval(timer)
   }, 'ds-bot: check the Main Bot turn time')
+
+  // While the hard line is on, only handing work on (or keep_working) may run. This
+  // guard runs before the tool body, so a denied call never executes.
+  rt.ctx.tools.guard((exec) => {
+    if (policy.mode !== 'enforce') return undefined
+    const sessionId = exec.agent?.id
+    if (!isMainSession(sessionId)) return undefined
+    const turn = turns.get(sessionId)
+    if (turn === undefined || turn.dispatchOnly !== true) return undefined
+    if (HARD_ALLOWED.has(exec.name)) return undefined
+    turn.rejected += 1
+    return HARD_REFUSAL
+  })
 
   Object.assign(rt, { noteDispatch, keepWorking, workAudit, workGate: policy, sweepWorkGate })
 }
