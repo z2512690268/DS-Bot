@@ -586,6 +586,8 @@ export function TeamSidebar(props) {
       items: roster.needsYou ?? [],
       health: roster.workHealth,
       stats: roster.workStats,
+      // What is in flight, with its estimate: shown, never a question.
+      running: roster.runningWork ?? [],
       onOpen: id => actions.openSession(id),
       // A double-click opens the conversation and brings the card itself up.
       onOpenCard: item => actions.openNeedsItem?.(item),

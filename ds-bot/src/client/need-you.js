@@ -60,6 +60,16 @@ export function shortDuration(ms) {
   return rest === 0 ? `${hour}h` : `${hour}h ${rest}m`
 }
 
+// One work in flight: what it was expected to take, how long it has run, and whether
+// the team already raised the Bot for it. Shown only — a work behind its estimate is
+// the team's problem, and the Bot that handed it on is the one that is told to act.
+export function runningLineOf(row) {
+  const elapsed = shortDuration(row?.elapsedMs ?? 0)
+  const estimate = typeof row?.minutes === 'number' ? `${zh() ? '预计' : 'Est.'} ${shortDuration(row.minutes * 60_000)}` : (zh() ? '未估时' : 'No estimate')
+  const raised = row?.escalated === true ? (zh() ? ' · 已升档' : ' · raised') : ''
+  return `${estimate} · ${zh() ? '已用' : 'in'} ${elapsed}${raised}`
+}
+
 // How the day went, in one line for the same block: what finished, how long the typical
 // one took, what is stalled, and what failed. Nothing to say on a quiet day, and no
 // dashboard: one sentence, in the same voice as the health line.
@@ -89,6 +99,10 @@ const EVENT_NAMES = {
   failed: ['失败', 'Failed'],
   dropped: ['无需处理', 'Dropped'],
   stalled: ['停滞', 'Stalled'],
+  eta: ['到预计 80%', 'At 80% of estimate'],
+  'eta-late': ['超出预计', 'Past estimate'],
+  'eta-action': ['处置', 'Acted'],
+  escalated: ['升档', 'Raised'],
   closed: ['结束', 'Ended'],
 }
 export function historyLines(item) {
@@ -217,8 +231,9 @@ export async function replyAndDismiss({ item, said, hidden = {}, at = Date.now()
   }
 }
 
-export function NeedsYou({ items: all_items, health, stats, onOpen, onOpenCard, onAnswer, onSend, onApprove, onApproval, onIgnore, onError }) {
+export function NeedsYou({ items: all_items, health, stats, running: runningWork, onOpen, onOpenCard, onAnswer, onSend, onApprove, onApproval, onIgnore, onError }) {
   const items = Array.isArray(all_items) ? all_items : []
+  const running = Array.isArray(runningWork) ? runningWork : []
   const [open, setOpen] = useState({}) // per item: is its answer field shown
   const [all, setAll] = useState(false) // every answer field at once
   const [timeline, setTimeline] = useState({}) // per work: is its history shown
@@ -234,7 +249,7 @@ export function NeedsYou({ items: all_items, health, stats, onOpen, onOpenCard, 
       ? { ...item, approvals: (Array.isArray(item.approvals) ? item.approvals : []).filter(one => answered[one.id] === undefined) }
       : item))
     .filter(item => item.kind !== 'approval' || item.approvals.length > 0)
-  if (rows.length === 0 && trouble === undefined && summary === undefined) return null
+  if (rows.length === 0 && trouble === undefined && summary === undefined && running.length === 0) return null
   const answers = rows.filter(item => item.kind === 'answer')
   const works = rows.filter(item => item.kind !== 'answer' && item.kind !== 'approval')
   const toggle = key => setOpen(prev => ({ ...prev, [key]: !prev[key] }))
@@ -342,11 +357,21 @@ export function NeedsYou({ items: all_items, health, stats, onOpen, onOpenCard, 
   return h('section', { className: 'bt-needs', 'aria-label': zh() ? '需要你' : 'Needs you' },
     trouble === undefined ? null : h('div', { className: 'bt-needs-health', role: 'status', title: zh() ? '最近一小时' : 'In the last hour' }, trouble),
     summary === undefined ? null : h('div', { className: 'bt-needs-stats', title: zh() ? '最近 24 小时' : 'In the last 24 hours' }, summary),
-    h('div', { className: 'bt-needs-head' },
+    // What is in flight, one line each: an estimate against the clock, never a question.
+    running.length === 0 ? null : h('ul', { className: 'bt-needs-flight', 'aria-label': zh() ? '在跑的工作' : 'Work in flight' },
+      running.map(row => h('li', {
+        key: row.id,
+        className: 'bt-needs-run',
+        'data-pace': row.pace,
+        title: [row.bot, row.askedBy === undefined ? undefined : (zh() ? `为 ${row.askedBy}` : `for ${row.askedBy}`), row.etaText].filter(Boolean).join(' · '),
+      },
+      h('span', { className: 'bt-needs-run-bot' }, row.bot ?? ''),
+      h('span', { className: 'bt-needs-run-time' }, runningLineOf(row))))),
+    rows.length === 0 ? null : h('div', { className: 'bt-needs-head' },
       h('span', { className: 'bt-needs-title' }, zh() ? '需要你' : 'Needs you'),
       h('span', { className: 'bt-needs-count' }, String(rows.length)),
       tools.length === 0 ? null : h('span', { className: 'bt-needs-tools' }, tools)),
-    h('ul', { className: 'bt-needs-list bt-needs-scroll' },
+    rows.length === 0 ? null : h('ul', { className: 'bt-needs-list bt-needs-scroll' },
       rows.map((item, index) => {
         const key = itemKey(item)
         const shown = all || open[key] === true

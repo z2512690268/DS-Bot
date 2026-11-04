@@ -15,7 +15,7 @@ const { JSDOM } = createRequire(join(process.env.DSH_HARNESS ?? join(PLUGIN, '..
 // read without a renderer. `useState` keeps its first value, which is what a first
 // paint shows; `mount` below gives it a store, for what a click does.
 const { outputFiles } = await build({
-  stdin: { contents: "export { NeedsYou, healthLineOf, historyLines, visibleItems, statsLineOf, shortDuration } from './src/client/need-you.js'", resolveDir: PLUGIN },
+  stdin: { contents: "export { NeedsYou, healthLineOf, historyLines, visibleItems, statsLineOf, shortDuration, runningLineOf } from './src/client/need-you.js'", resolveDir: PLUGIN },
   bundle: true, format: 'cjs', platform: 'browser', write: false, logLevel: 'silent',
   external: ['react'],
 })
@@ -34,7 +34,7 @@ const react = {
   Fragment: Symbol('Fragment'),
   useState: initial => [initial, () => {}],
 }
-const { NeedsYou, healthLineOf, historyLines, visibleItems, statsLineOf, shortDuration } = load(react)
+const { NeedsYou, healthLineOf, historyLines, visibleItems, statsLineOf, shortDuration, runningLineOf } = load(react)
 
 const flat = (children) => children.flatMap(child => (Array.isArray(child) ? flat(child) : child === undefined || child === null || child === false ? [] : [child]))
 // The stand-in does not run components, so the walk does: a component element is
@@ -394,4 +394,33 @@ test('a single click opens the chat; a double-click or Enter opens the card', ()
   const answer = ui.rows().find(node => node.props['data-kind'] === 'answer')
   answer.props.onKeyDown({ key: 'Enter', preventDefault() {}, nativeEvent: {} })
   assert.deepEqual(focused.at(-1), ['answer', 'answer:q1'])
+})
+
+test('the work in flight shows its estimate against the clock, and asks nothing', () => {
+  const tree = NeedsYou({
+    items: [],
+    running: [
+      { id: 'w1', bot: 'Writer', askedBy: 'Chief', minutes: 20, elapsedMs: 16 * 60_000, pace: 'due', etaText: '20 minutes' },
+      { id: 'w2', bot: 'Researcher', minutes: undefined, elapsedMs: 3 * 60_000, pace: 'unknown', escalated: true },
+    ],
+    onOpen() {},
+  })
+  const rows = nodes(tree).filter(node => node.props?.className === 'bt-needs-run')
+  assert.equal(rows.length, 2)
+  // Behind its estimate is the yellow row; the text is the estimate and the time spent.
+  assert.equal(rows[0].props['data-pace'], 'due')
+  assert.equal(textOf(rows[0]), 'WriterEst. 20m · in 16m')
+  // No estimate is said plainly, and a raised Bot says so.
+  assert.equal(rows[1].props['data-pace'], 'unknown')
+  assert.equal(textOf(rows[1]), 'ResearcherNo estimate · in 3m · raised')
+  // Nothing here is a row to act on: no kind, no buttons, no answer field.
+  assert.equal(nodes(tree).some(node => node.props?.['data-kind'] !== undefined), false)
+  assert.equal(buttons(tree).length, 0)
+  // A team with nothing in flight and nothing waiting stays quiet.
+  assert.equal(NeedsYou({ items: [], running: [], onOpen() {} }), null)
+})
+
+test('the running line reads the same in both cases', () => {
+  assert.equal(runningLineOf({ minutes: 10, elapsedMs: 5 * 60_000 }), 'Est. 10m · in 5m')
+  assert.equal(runningLineOf({ elapsedMs: 12_000 }), 'No estimate · in 12s')
 })

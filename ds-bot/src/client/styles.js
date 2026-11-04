@@ -165,6 +165,14 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-needs-unsure{flex:1 1 100%;line-height:1.35;color:color-mix(in srgb,var(--bt-danger) 62%,var(--bt-ink))}
 .bt-needs-health{font-size:11px;line-height:1.4;padding:4px 6px;border-radius:8px;color:color-mix(in srgb,var(--bt-danger) 78%,var(--bt-ink));background:color-mix(in srgb,var(--bt-danger) 10%,transparent)}
 .bt-needs-stats{font-size:11px;line-height:1.4;padding:0 6px;color:color-mix(in srgb,var(--bt-ink) 50%,transparent)}
+/* What is in flight: an estimate against the clock, one quiet line each. Yellow once
+   it passes 80% of the estimate, red once it is far past it. */
+.bt-needs-flight{list-style:none;margin:0;padding:0 6px;display:flex;flex-direction:column;gap:1px}
+.bt-needs-run{display:flex;gap:6px;align-items:baseline;min-width:0;font-size:11px;line-height:1.4;color:color-mix(in srgb,var(--bt-ink) 56%,transparent)}
+.bt-needs-run-bot{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:45%;flex:0 1 auto}
+.bt-needs-run-time{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
+.bt-needs-run[data-pace="due"]{color:color-mix(in srgb,var(--bt-star) 70%,var(--bt-ink))}
+.bt-needs-run[data-pace="late"]{color:color-mix(in srgb,var(--bt-danger) 72%,var(--bt-ink))}
 .bt-context{font-size:11px;line-height:1.4;margin:2px 8px;color:color-mix(in srgb,var(--bt-ink) 46%,transparent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-context-split{color:color-mix(in srgb,var(--bt-danger) 70%,var(--bt-ink))}
 .bt-audit{font-size:11px;line-height:1.4;margin:0 8px 2px;color:color-mix(in srgb,var(--bt-ink) 46%,transparent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
