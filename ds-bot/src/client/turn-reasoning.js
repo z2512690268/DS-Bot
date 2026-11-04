@@ -9,6 +9,17 @@ export function stepReasoning(step) {
     .trim()
 }
 
+// The Turn's latest reasoning before `current`: the answer step often has no reasoning
+// of its own, and the reasoning that led to it is what a waiting reader wants to see.
+export function previousReasoning(steps, current) {
+  const earlier = steps.filter(step => step !== current && (step.step === undefined || current.step === undefined || step.step < current.step))
+  for (let index = earlier.length - 1; index >= 0; index -= 1) {
+    const text = stepReasoning(earlier[index])
+    if (text !== '') return text
+  }
+  return ''
+}
+
 // Whether `current` opens the Turn's reply in the chat: the first step that shows
 // anything — reply text, or its own reasoning while thinking is shown.
 export function opensReply(steps, current, withReasoning = true) {

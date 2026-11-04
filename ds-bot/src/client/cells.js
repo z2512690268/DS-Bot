@@ -14,7 +14,7 @@ import { SecretToolCell } from './secret-card.js'
 import { HandoffCall } from './handoff-card.js'
 import { t } from './i18n.js'
 import { failureLabel } from './diagnostics.js'
-import { stepReasoning, thinkingStep, opensReply } from './turn-reasoning.js'
+import { stepReasoning, thinkingStep, opensReply, previousReasoning } from './turn-reasoning.js'
 import { parseReplies, stackReplies } from '../shared/group-replies.js'
 import { FOLD_AT, FOLD_HUGE, stripLongNote, useFold } from './fold.js'
 import { noHover, useViewport, viewBottom } from './motion.js'
@@ -252,8 +252,11 @@ export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentio
   // One thinking block per step, above that step's own content and its tool lines, as
   // DSH's own chat draws it: the reasoning part carries the step's reasoning, the reply
   // part does not repeat it.
-  const reasoning = groupPart === 'response' || !shown ? '' : stepReasoning(data)
-  const thinking = reasoning === '' ? undefined : thinkingStep(members)
+  const own = groupPart === 'response' || !shown ? '' : stepReasoning(data)
+  // The step that answers usually carries no reasoning of its own; while it runs, keep
+  // the Turn's latest reasoning on screen instead of a fixed phrase.
+  const reasoning = own !== '' ? own : running && shown ? previousReasoning(members, data) : ''
+  const thinking = reasoning === '' ? undefined : (own !== '' ? thinkingStep(members) : data)
   // The step's own span: its first visible chunk to the message that settled it.
   const ms = reasoning === '' || running || data.finalNode?.time === undefined || data.time === undefined
     ? undefined
