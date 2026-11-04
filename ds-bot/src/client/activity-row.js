@@ -21,6 +21,9 @@ const toolLabel = tool => {
 }
 export { reducedMotion }
 
+// The notes that name running work, as opposed to streaming text or reasoning.
+export const toolEntries = entries => entries.filter(entry => !entry.text && !entry.reasoning)
+
 // A turn that streams text first and runs a tool after keeps its row once the
 // tool starts: streaming alone hides it, but running work must not.
 export const rowVisible = ({ running, streaming, tools, relaying, bot, room }) =>
@@ -131,8 +134,12 @@ export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useL
     return entry?.switching === true && entry.folder === true && entry.roomId === undefined ? entry.since : 0
   }) ?? 0
   const entries = useMemo(() => Object.values(JSON.parse(liveKey)), [liveKey])
-  const streaming = entries.some(entry => entry.text)
-  const tools = entries.filter(entry => !entry.text).sort((a, b) => a.at - b.at)
+  // Reasoning streaming in the transcript is as good as streaming text: the row steps
+  // aside, so the reader sees the thinking itself rather than a fixed phrase.
+  const streaming = entries.some(entry => entry.text || entry.reasoning)
+  // A reasoning note is not a tool: it only tells the row the transcript already shows
+  // the thinking, so a lone reasoning note leaves nothing for the row to say.
+  const tools = toolEntries(entries).sort((a, b) => a.at - b.at)
   // Group chats show who is typing on their own while members speak.
   const relaying = tools.some(entry => entry.relay)
   const visible = moveAt !== 0 || rowVisible({ running, streaming, tools, relaying, bot, room })
