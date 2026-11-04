@@ -8039,6 +8039,14 @@ function stepReasoning(step) {
   if (step?.blocks === void 0) return "";
   return step.blocks.filter((block) => block.kind === "reasoning").map((block) => visibleReasoning(block.text)).join("\n").trim();
 }
+function previousReasoning(steps, current) {
+  const earlier = steps.filter((step) => step !== current && (step.step === void 0 || current.step === void 0 || step.step < current.step));
+  for (let index = earlier.length - 1; index >= 0; index -= 1) {
+    const text = stepReasoning(earlier[index]);
+    if (text !== "") return text;
+  }
+  return "";
+}
 function opensReply(steps, current, withReasoning = true) {
   const members = steps.length ? steps : [current];
   const opener = members.find((step) => texts(step).length > 0 || withReasoning && stepReasoning(step) !== "");
@@ -8789,8 +8797,9 @@ function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, use
   const running = data.status === "running";
   const members = steps.length ? steps : [data];
   const shown = thinkingShown(roster.prefs);
-  const reasoning = groupPart === "response" || !shown ? "" : stepReasoning(data);
-  const thinking = reasoning === "" ? void 0 : thinkingStep(members);
+  const own = groupPart === "response" || !shown ? "" : stepReasoning(data);
+  const reasoning = own !== "" ? own : running && shown ? previousReasoning(members, data) : "";
+  const thinking = reasoning === "" ? void 0 : own !== "" ? thinkingStep(members) : data;
   const ms = reasoning === "" || running || data.finalNode?.time === void 0 || data.time === void 0 ? void 0 : Math.max(1e3, data.finalNode.time - data.time);
   useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts2.length > 0 ? { text: true } : null);
   useLiveNote(actions, sessionId, `reasoning:${node.key ?? data.seq}`, reasoningNote({ hidden, running, reasoning, texts: texts2 }));

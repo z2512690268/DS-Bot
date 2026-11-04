@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
 import { build } from 'esbuild'
+import { previousReasoning } from '../src/client/turn-reasoning.js'
 
 // While a turn runs and its step already streams reasoning, the transcript shows the
 // thinking itself; the activity row must step aside instead of repeating a fixed phrase.
@@ -35,7 +36,7 @@ const step = ({ status = 'running', blocks } = {}) => ({
   turn: 1, step: 2, seq: 20, status, time: 1_000,
   blocks: blocks ?? [{ kind: 'reasoning', text: 'Working through the options.' }],
 })
-const props = ({ data, actions }) => ({
+const props = ({ data, actions, steps }) => ({
   node: { key: 'n20', location: { kind: 'step', turn: { turn: 1, status: 'open' } }, data },
   groupPart: 'reasoning',
   sessionId: 'b',
@@ -44,7 +45,7 @@ const props = ({ data, actions }) => ({
   useTurnData: () => undefined,
   useRoster: select => select({ bots: [], byId: {}, roomsById: {}, exchangeTurns: {}, prefs: { thinking: true } }),
   useUi: () => null,
-  useTurnSteps: () => [data],
+  useTurnSteps: () => steps ?? [data],
   useTurnContext: () => [],
   actions,
 })
@@ -81,4 +82,28 @@ test('the activity row hides while reasoning streams and returns when a tool run
   assert.equal(rows.rowVisible({ ...base, streaming: true }), false)
   assert.equal(rows.rowVisible({ ...base, streaming: true, tools: [{ label: 'Running shell commands' }] }), true)
   assert.equal(rows.rowVisible({ ...base, streaming: false }), true)
+})
+
+test('the latest earlier reasoning answers for an answer step that has none', () => {
+  const first = { turn: 1, step: 1, blocks: [{ kind: 'reasoning', text: 'Step one thought' }, { kind: 'tool-call', name: 'bash' }] }
+  const second = { turn: 1, step: 2, blocks: [{ kind: 'reasoning', text: 'Step two thought' }] }
+  const answer = { turn: 1, step: 3, blocks: [{ kind: 'text', text: 'Done' }] }
+  assert.equal(previousReasoning([first, second, answer], answer), 'Step two thought')
+  assert.equal(previousReasoning([first, second], first), '')
+  assert.equal(previousReasoning([], answer), '')
+})
+
+test('a running answer step without reasoning keeps the turn thinking on screen', () => {
+  stub.effects.length = 0
+  const noted = []
+  const earlier = { turn: 1, step: 1, seq: 10, status: 'settled', time: 500, blocks: [{ kind: 'reasoning', text: 'Earlier thinking' }] }
+  const answer = { turn: 1, step: 2, seq: 20, status: 'running', time: 900, blocks: [{ kind: 'reasoning', text: '' }] }
+  const out = cells.AssistantCell(props({ data: answer, steps: [earlier, answer], actions: { noteLive: (...args) => noted.push(args) } }))
+  const rows = []
+  const walk = node => { if (Array.isArray(node)) return node.forEach(walk); if (!node || typeof node !== 'object') return; rows.push(node); (node.children ?? []).forEach(walk) }
+  walk(out)
+  const row = rows.find(node => node.type?.name === 'ThinkingRow')
+  assert.equal(row?.props.text, 'Earlier thinking')
+  for (const effect of stub.effects) effect()
+  assert.ok(noted.some(args => args[2]?.reasoning === true), 'no reasoning note for the carried thinking')
 })
