@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import { MESSAGE_INLINE_MAX, TEXT_KEPT, WORK_LOG_MAX } from './constants.js'
 import { headOf } from './text.js'
-import { jobInProgress, leasePolicyOf, normalizeReport, proactiveOf, reportLine, stalledReport, waitsForUser, workStateOf } from './work-state.js'
+import { etaDeviation, etaView, jobInProgress, leasePolicyOf, normalizeReport, parseEta, proactiveOf, reportLine, stalledReport, waitsForUser, workStateOf } from './work-state.js'
 
 const minutes = since => {
   const count = Math.floor((Date.now() - since) / 60_000)
@@ -48,6 +48,10 @@ export function install(rt) {
       ...(work.at === undefined ? {} : { at: work.at, ms: Math.max(0, closedAt - work.at) }),
       closedAt,
       ...(work.report?.summary === undefined ? {} : { summary: work.report.summary }),
+      // The estimate it carried, whether the team reminded its owner, and how it ended:
+      // the three facts a later question about an overrun needs.
+      ...(work.eta === undefined ? {} : { eta: { minutes: work.eta.minutes, text: work.eta.text, reminded: work.eta.reminded ?? [], ...(work.escalation === undefined ? {} : { escalation: { kind: work.escalation.kind, to: work.escalation.to, temporary: work.escalation.temporary === true, restored: work.escalation.restored === true } }) } }),
+      ...(work.escalation === undefined ? {} : { escalated: true }),
       history: [...(work.history ?? []), { at: closedAt, event: 'closed', final: work.report?.state ?? fallback }].slice(-HISTORY_MAX),
     })
     if (workLog().length > WORK_LOG_MAX) workLog().splice(0, workLog().length - WORK_LOG_MAX)
@@ -205,10 +209,13 @@ export function install(rt) {
   // `authority`: `asked` when the user asked for it, `delegated` when another Bot did,
   // `proposed` when a Bot started it on its own. It is context for people, not a gate:
   // Bots act on messages, so the plugin has nothing to refuse at this point.
-  function openWork(id, { from, to, parent, fromRoom, room, name, child, authority }) {
+  function openWork(id, { from, to, parent, fromRoom, room, name, child, authority, eta }) {
     const above = parent === undefined ? undefined : works()[parent]
     const at = Date.now()
-    works()[id] = { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(room ? { room } : {}), ...(above ? { parent } : {}), ...(fromRoom ? { fromRoom } : {}), ...(name ? { name } : {}), ...(child ? { child } : {}), authority: authority ?? 'delegated', lease: { at, by: to }, open: [], results: [], at, history: [{ at, event: 'created', authority: authority ?? 'delegated' }] }
+    // The estimate of how long it takes is optional: a hand-off without one works, and
+    // the panel says "no estimate" instead of comparing it to anything.
+    const estimate = parseEta(eta)
+    works()[id] = { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(room ? { room } : {}), ...(above ? { parent } : {}), ...(fromRoom ? { fromRoom } : {}), ...(name ? { name } : {}), ...(child ? { child } : {}), ...(estimate ? { eta: { ...estimate, at } } : {}), authority: authority ?? 'delegated', lease: { at, by: to }, open: [], results: [], at, history: [{ at, event: 'created', authority: authority ?? 'delegated' }] }
     if (above !== undefined) above.open.push(id)
     save()
   }
@@ -434,6 +441,7 @@ export function install(rt) {
     rt.warn('ds-bot: closing work %s for %s: report %s, action %s, card target %s',
       id, name, work.report?.state ?? 'none', work.report?.humanAction === undefined ? 'none' : 'yes', work.from ?? 'none')
     askAttention(work, name, id)
+    restoreEscalation(id, work)
     recordClosed(id, work, 'ready')
     delete works()[id]
     // What it still waits for comes back to it alone.
@@ -493,6 +501,7 @@ export function install(rt) {
     const work = works()[id]
     if (work === undefined) return
     const { parent } = work
+    restoreEscalation(id, work)
     recordClosed(id, work, 'dropped')
     delete works()[id]
     const above = works()[parent]
@@ -876,6 +885,204 @@ export function install(rt) {
     await rt.deliver({ fromId: work.to, toId: work.from, role: 'stalled', text })
   }
 
+  // --- The estimate a hand-off carried, and the ladder out of an overrun ------------
+  //
+  // A work running past its estimate is the team's own problem, not the user's: at 80%
+  // and again at 150% the Bot that handed it on is told, with the next rung spelled
+  // out, and it acts. The ladder goes up, not sideways — a higher thinking level on the
+  // same model, then a stronger model, then a dedicated Bot for the blocker. Moving the
+  // work to another Bot of the same kind is the last resort, for a polluted context.
+  // Nothing here asks the user to decide.
+
+  const ETA_AUDIT_MAX = 200
+  const etaAuditLog = () => (state.etaAudit ??= [])
+  function recordEta(entry) {
+    etaAuditLog().push({ at: Date.now(), ...entry })
+    if (etaAuditLog().length > ETA_AUDIT_MAX) etaAuditLog().splice(0, etaAuditLog().length - ETA_AUDIT_MAX)
+    save()
+  }
+
+  // Reminders delivered and not acted on yet, per Bot that handed the work on. Only the
+  // latest few matter, and only within this run: the mark on the work is the durable part.
+  const etaPending = new Map()
+  function pendEta(sessionId, entry) {
+    const list = etaPending.get(sessionId) ?? []
+    list.push(entry)
+    if (list.length > 5) list.splice(0, list.length - 5)
+    etaPending.set(sessionId, list)
+  }
+
+  // The next rung for a Bot that is behind: a higher thinking level on its model, a
+  // stronger model, or a dedicated Bot when the catalog offers nothing better.
+  async function escalationAdvice(work) {
+    const bot = rt.botOf(work?.to)
+    if (bot === undefined) return { kind: 'unknown' }
+    const ref = bot.model ?? bot.appliedModel
+    const reasoning = ref === undefined ? undefined : await Promise.resolve(rt.reasoningOf?.(ref)).catch(() => undefined)
+    const efforts = reasoning?.efforts ?? []
+    const current = bot.effort ?? reasoning?.defaultEffort
+    const at = efforts.findIndex(effort => effort.id === current)
+    const next = at < 0 ? efforts[efforts.length - 1] : efforts[at + 1]
+    if (next !== undefined && next.id !== current) return { kind: 'effort', bot: bot.name, botId: bot.id, from: current, to: next.id }
+    const models = (await Promise.resolve(rt.catalog?.() ?? []).catch(() => []))
+      .map(entry => entry.ref)
+      .filter(model => model !== bot.model)
+    if (models.length > 0) return { kind: 'model', bot: bot.name, botId: bot.id, options: models.slice(0, 5), to: models[0] }
+    return { kind: 'new-bot', bot: bot.name, botId: bot.id }
+  }
+
+  // The next step, in words the Bot that handed the work on can act on with one call.
+  function adviceText(advice) {
+    if (advice.kind === 'effort') {
+      return `raise ${advice.bot}'s thinking level to ${advice.to} (update_bot bot "${advice.bot}" effort "${advice.to}" temporary true), and let it carry on rather than repeating steps it already finished`
+    }
+    if (advice.kind === 'model') {
+      return `move ${advice.bot} to a stronger model such as ${advice.to} (update_bot bot "${advice.bot}" model "${advice.to}" temporary true); it goes back to its own model when the work ends`
+    }
+    if (advice.kind === 'new-bot') {
+      return `create one dedicated high-spec Bot for this blocker (create_bot, with a diagnosis of what was tried, what the errors were and what is already ruled out) and let it hand the conclusion back to ${advice.bot}`
+    }
+    return 'check what it is doing and decide: raise its effort or model with update_bot, or take the blocked step yourself'
+  }
+
+  async function notifyEta(id, work, deviation) {
+    if (work.from === undefined || work.to === undefined || rt.botOf(work.from) === undefined) return
+    const advice = await escalationAdvice(work)
+    const estimate = Math.max(1, Math.round(deviation.minutes))
+    const spent = Math.max(1, Math.round(deviation.elapsedMs / 60_000))
+    const suggest = adviceText(advice)
+    const text = deviation.stage === 1
+      ? `The work you handed to ${nameOf(work.to)} was estimated at ${estimate} min and ${spent} min have passed with no result. Act now rather than passing the decision on: ${suggest}. Only if that step needs a credential, money or an outside account, tell the user what you tried, where it is stuck and the one thing they must do.`
+      : `The work you handed to ${nameOf(work.to)} is 50% past its estimate (${spent} min of ${estimate} min) and still has no result. Act now: ${suggest}. If the blocker is the Bot's context rather than the task, start a fresh Bot with the diagnosis of what was tried and let it hand the conclusion back. Do not simply move the work to another Bot of the same kind, and do not ask the user unless the step itself needs them.`
+    await rt.deliver({ fromId: work.to, toId: work.from, role: deviation.stage === 1 ? 'eta' : 'eta-late', text })
+    // The reminder lands in the asker's own chat, so that is the session its action comes from.
+    const sessionId = rt.chatOf(work.from)
+    if (sessionId !== undefined) pendEta(sessionId, { work: id, stage: deviation.stage, at: Date.now() })
+  }
+
+  // Time only: the estimate is compared with the clock, and what the work is doing is
+  // the owner's report, not this check.
+  function sweepEta(at) {
+    let changed = false
+    for (const [id, work] of Object.entries(works())) {
+      const deviation = etaDeviation(work, at)
+      if (deviation === undefined) continue
+      const stages = deviation.stage === 2 ? [1, 2] : [1]
+      work.eta.reminded = [...new Set([...(work.eta.reminded ?? []), ...stages])].sort((left, right) => left - right)
+      pushHistory(work, { at, event: deviation.stage === 1 ? 'eta' : 'eta-late', minutes: work.eta.minutes, elapsed: Math.max(1, Math.round(deviation.elapsedMs / 60_000)) })
+      recordEta({ work: id, kind: deviation.stage === 1 ? 'due' : 'late', minutes: work.eta.minutes, elapsedMs: deviation.elapsedMs, bot: nameOf(work.to) })
+      changed = true
+      void notifyEta(id, work, deviation).catch((error) => {
+        // It was not told, so the next sweep tries again rather than swallowing it.
+        rt.warn('ds-bot: the estimate of work %s was not checked with its owner: %s', id, error)
+        work.eta.reminded = (work.eta.reminded ?? []).filter(stage => stage !== deviation.stage)
+        noteFault('delivery')
+        save()
+      })
+    }
+    return changed
+  }
+
+  // What the Bot that handed the work on did about a reminder, kept for the audit: the
+  // rung it took, and whether it went sideways instead of up.
+  function noteEtaAction(sessionId, action = {}) {
+    const list = etaPending.get(sessionId)
+    if (list === undefined || list.length === 0) return undefined
+    const target = action.target
+    let index = target === undefined ? list.length - 1 : list.findIndex(entry => nameOf(works()[entry.work]?.to) === target)
+    if (index < 0) index = list.length - 1
+    const pending = list.splice(index, 1)[0]
+    if (list.length === 0) etaPending.delete(sessionId)
+    const work = works()[pending.work]
+    const holder = nameOf(work?.to)
+    const kind = action.kind ?? 'other'
+    const record = {
+      work: pending.work,
+      stage: pending.stage,
+      kind,
+      ...(action.target === undefined ? {} : { target: action.target }),
+      ...(action.reason === undefined ? {} : { reason: action.reason }),
+      ...(kind === 'hand' && target !== undefined && target !== holder ? { ladder: 'horizontal', nonDefault: true } : {}),
+      ...(kind === 'hand' && target === holder ? { ladder: 'nudge' } : {}),
+      ...(kind === 'new-bot' ? { ladder: 'new-bot' } : {}),
+      ...(kind === 'stop' ? { ladder: 'stop' } : {}),
+      ...(kind === 'self' ? { ladder: 'self' } : {}),
+    }
+    recordEta(record)
+    if (work !== undefined) {
+      pushHistory(work, { at: record.at, event: 'eta-action', kind, ...(record.target === undefined ? {} : { target: record.target }) })
+      save()
+    }
+    return record
+  }
+
+  // A raise is only temporary for a work that is behind: the pending reminder names it.
+  const etaTargetOf = (sessionId, botId) => (etaPending.get(sessionId) ?? []).find(entry => works()[entry.work]?.to === botId)?.work
+
+  // A Main Bot raised the model or the thinking level of a Bot that is behind its
+  // estimate. The values before are kept, so a temporary raise goes back when the work
+  // ends, and the audit says which it was.
+  function recordEscalation({ sessionId, bot, before, after, kind, temporary = false }) {
+    const list = etaPending.get(sessionId)
+    if (list === undefined || bot === undefined) return undefined
+    const pending = list.find(entry => works()[entry.work]?.to === bot.id)
+    if (pending === undefined) return undefined
+    const work = works()[pending.work]
+    if (work === undefined) return undefined
+    const at = Date.now()
+    const from = { ...(before?.model === undefined ? {} : { model: before.model }), ...(before?.effort === undefined ? {} : { effort: before.effort }) }
+    const to = { ...(after?.model === undefined ? {} : { model: after.model }), ...(after?.effort === undefined ? {} : { effort: after.effort }) }
+    work.escalation = { at, kind, bot: bot.id, from, to, temporary: temporary === true, restored: false }
+    pushHistory(work, { at, event: 'escalated', kind, ...(to.effort === undefined ? {} : { effort: to.effort }), ...(to.model === undefined ? {} : { model: to.model }) })
+    recordEta({ work: pending.work, kind, bot: bot.name, from, to, temporary: temporary === true })
+    return { work: pending.work, kind, from, to }
+  }
+
+  // A temporary raise goes back when the work it was made for ends, unless the Bot was
+  // changed to something else meanwhile: a later decision wins.
+  function restoreEscalation(id, work) {
+    const escalation = work?.escalation
+    if (escalation === undefined || escalation.temporary !== true || escalation.restored === true) return
+    escalation.restored = true
+    const patch = {
+      ...(escalation.to.model === undefined ? {} : { model: escalation.from.model ?? '' }),
+      ...(escalation.to.effort === undefined ? {} : { effort: escalation.from.effort ?? '' }),
+    }
+    void (async () => {
+      const bot = rt.botOf(escalation.bot)
+      if (bot === undefined) return
+      const stillRaised = (escalation.to.model === undefined || bot.model === escalation.to.model)
+        && (escalation.to.effort === undefined || bot.effort === escalation.to.effort)
+      if (!stillRaised) {
+        recordEta({ work: id, kind: 'restore-skipped', bot: bot.name, why: 'the Bot was changed meanwhile' })
+        return
+      }
+      await Promise.resolve(rt.updateBot?.(bot.id, patch)).catch(error => rt.warn('ds-bot: %s was not put back after the work ended: %s', bot.name, error))
+      recordEta({ work: id, kind: 'restore', bot: bot.name, model: escalation.from.model, effort: escalation.from.effort })
+    })()
+  }
+
+  // One line per open work that is being done: what was expected, how long it has run,
+  // and whether the team already raised the Bot for it. The panel shows it; the user is
+  // not asked to act on it.
+  function runningWorks(at = Date.now()) {
+    const rows = []
+    for (const [id, work] of Object.entries(works())) {
+      if (work.to === undefined || work.proposal !== undefined) continue
+      if (waitsForUser(workStateOf(work, at).state)) continue
+      rows.push({
+        id,
+        botId: work.to,
+        bot: nameOf(work.to),
+        ...(work.from === undefined || nameOf(work.from) === undefined ? {} : { askedBy: nameOf(work.from) }),
+        at: work.at,
+        ...etaView(work, at),
+        ...(work.escalation === undefined ? {} : { escalated: true, escalation: work.escalation.kind }),
+      })
+    }
+    return rows
+  }
+
   // The stalled task goes back to the Bot that held it, under the same work. The
   // request is named by the work, so a sweep that runs again — in this run or after a
   // restart, with or without the stall mark — finds its receipt and never runs the
@@ -953,6 +1160,8 @@ export function install(rt) {
       })
     }
     if (changed) save()
+    // The estimate is checked on the same tick as the lease: both are about time.
+    if (sweepEta(at)) changed = true
     return changed
   }
   rt.ctx?.effect?.(() => {
@@ -961,5 +1170,5 @@ export function install(rt) {
     return () => clearInterval(timer)
   }, 'ds-bot: mark work that stopped reporting')
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, recordProposal, approveProposal, noteWorkTurn, noteFault, workStats, workHistory, workHealth, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, replyDelivery, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, recordProposal, approveProposal, noteWorkTurn, noteFault, workStats, workHistory, workHealth, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, replyDelivery, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork, runningWorks, noteEtaAction, recordEscalation, etaTargetOf, etaAdvice: id => escalationAdvice(works()[id]), etaAudit: () => etaAuditLog() })
 }

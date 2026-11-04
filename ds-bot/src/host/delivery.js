@@ -32,6 +32,10 @@ export function install(rt) {
     // The lease of a work this Bot waits for ran out: it is news to act on, not a
     // request, so the turn that reads it owes no answer.
     if (role === 'stalled') return `[A work you handed on to ${fromName} stalled]`
+    // The estimate a hand-off carried ran out: the Bot that handed it on acts on it,
+    // and the turn that reads this owes no answer to the Bot that is behind.
+    if (role === 'eta') return `[A work you handed on to ${fromName} is behind its estimate]`
+    if (role === 'eta-late') return `[A work you handed on to ${fromName} is far past its estimate]`
     // A Bot held up by an approval: the Bot that handed the work on hears it is blocked,
     // and the Bot that was refused hears what to do next.
     if (role === 'approval') return `[${fromName} is blocked on an approval]`

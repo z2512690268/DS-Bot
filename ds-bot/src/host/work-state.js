@@ -148,6 +148,94 @@ export function leasePolicyOf(config = {}) {
   }
 }
 
+// How long a hand-off was expected to take, and how the team checks it: at `soft` of
+// the estimate, and again at `late`, the Bot that handed the work on is told — once
+// each, two notices at most. The check is time only: the estimate is the number of
+// minutes the hand-off carried, never a guess about what the work is doing.
+export const ETA_SOFT_RATIO = 0.8
+export const ETA_LATE_RATIO = 1.5
+export const ETA_MAX_REMINDERS = 2
+
+// Numerals a hand-off may write instead of digits: "半小时", "两小时", "几小时". A
+// spelled-out estimate is approximate by nature, and the last two get a typical value
+// so that a fuzzy ETA still has a number to compare against.
+const NUMERALS = { 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 半: 0.5, 几: 3, 数: 3 }
+const FUZZY = new Set(['半', '几', '数'])
+
+/**
+ * The ETA a hand-off carried, as `{ text, minutes }`, or undefined when it names no
+ * length of time. Numbers are minutes; a string may say "20", "20 分钟", "1.5h",
+ * "半小时" or "几小时". A spelled-out or fuzzy estimate is marked `approximate`, and
+ * still has a number: the supervisor compares time, not words.
+ */
+export function parseEta(value) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? { text: `${value} min`, minutes: value } : undefined
+  }
+  const raw = String(value ?? '').replace(/\s+/g, ' ').trim()
+  if (raw === '' || raw.length > 80) return undefined
+  let text = raw
+  let approximate = false
+  if (!/\d/.test(text)) {
+    const spelled = text.match(/([一两二三四五六七八九十半几数])/)
+    if (spelled !== null && NUMERALS[spelled[1]] !== undefined) {
+      text = text.replace(spelled[1], String(NUMERALS[spelled[1]]))
+      approximate = true
+    }
+  }
+  const number = text.match(/(\d+(?:[.,]\d+)?)/)
+  if (number === null) return undefined
+  const count = Number(number[1].replace(',', '.'))
+  if (!Number.isFinite(count) || count <= 0) return undefined
+  const minutes = /小时|hours?\b|hrs?\b|(?:^|\d)\s*h$/i.test(text) ? count * 60
+    : /天|days?\b|\bd\b/i.test(text) ? count * 24 * 60
+      : /秒|\bseconds?\b|\bsecs?\b/i.test(text) ? count / 60
+        : count
+  return { text: raw, minutes: Math.round(minutes * 100) / 100, ...(approximate || FUZZY.has(raw[0]) ? { approximate: true } : {}) }
+}
+
+/**
+ * What the ETA supervisor acts on: the notice owed to the Bot that handed the work on,
+ * or undefined while the work is within its estimate, already reminded at this stage,
+ * or no longer running. `stage` is 1 at 80% of the estimate and 2 at 150%.
+ */
+export function etaDeviation(work, at = Date.now()) {
+  if (work === undefined || work.proposal !== undefined) return undefined
+  const eta = work.eta
+  if (eta === undefined || !Number.isFinite(eta.minutes) || eta.minutes <= 0) return undefined
+  // A work that reported how it ended is not late any more, whatever the clock says.
+  if (work.report !== undefined && work.report.state !== 'progress') return undefined
+  const since = work.at ?? eta.at ?? at
+  const elapsedMs = Math.max(0, at - since)
+  const ratio = elapsedMs / (eta.minutes * 60_000)
+  const stage = ratio >= ETA_LATE_RATIO ? 2 : ratio >= ETA_SOFT_RATIO ? 1 : 0
+  if (stage === 0) return undefined
+  const reminded = Array.isArray(eta.reminded) ? eta.reminded : []
+  if (reminded.includes(stage) || reminded.length >= ETA_MAX_REMINDERS) return undefined
+  return { stage, ratio, elapsedMs, minutes: eta.minutes }
+}
+
+/**
+ * One open work as the panel shows it: how long it was expected to take, how long it
+ * has run, and how that compares — `on`, `due` (past 80%), `late` (past 150%), or
+ * `unknown` when it carried no estimate. Never a guess about the work itself.
+ */
+export function etaView(work, at = Date.now()) {
+  const elapsedMs = Math.max(0, at - (work?.at ?? at))
+  const eta = work?.eta
+  if (eta === undefined || !Number.isFinite(eta.minutes) || eta.minutes <= 0) {
+    return { elapsedMs, minutes: undefined, ratio: undefined, pace: 'unknown' }
+  }
+  const ratio = elapsedMs / (eta.minutes * 60_000)
+  return {
+    etaText: eta.text,
+    minutes: eta.minutes,
+    elapsedMs,
+    ratio,
+    pace: ratio >= ETA_LATE_RATIO ? 'late' : ratio >= ETA_SOFT_RATIO ? 'due' : 'on',
+  }
+}
+
 // A background job is expected to take about half an hour; waiting for one is progress.
 // Past twice that, a job that has written nothing for as long is stuck as far as the
 // team can tell, and the work it holds may be marked stale again.

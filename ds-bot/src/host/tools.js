@@ -8,7 +8,7 @@ import { within } from './folders.js'
 import { absoluteLinks } from './links.js'
 import { NAME_MAX } from './requests.js'
 import { unquote } from './text.js'
-import { REPORT_STATES } from './work-state.js'
+import { REPORT_STATES, parseEta } from './work-state.js'
 import { mentionSpans } from '../shared/mentions.js'
 import { checkShownView, showViewDescription, showViewParameters } from 'deep-view/core'
 
@@ -174,6 +174,10 @@ export function install(rt) {
         type: 'string',
         description: `Your own name for this request, up to ${NAME_MAX} characters, so that a repeat of it is not sent twice. Send the same request_id with the same message when you repeat a call: the receipt of the first call comes back and nothing is sent again. A request_id names one request: with other content it is refused.`,
       },
+      eta: {
+        type: 'string',
+        description: 'How long you expect this work to take, as minutes or a phrase: "20", "20 minutes", "half an hour". The team checks that estimate and tells you at 80% and at 150% of it, with the next step to raise the Bot\'s thinking level or model. Never a promise to the user: just the estimate.',
+      },
     },
     output,
     async execute(args, exec) {
@@ -267,7 +271,7 @@ export function install(rt) {
         const steer = (args.when !== 'queue' && !toUser && !saturated) || (joins && earlier.steered && !saturated)
         const exchangeId = joins ? earlier.message.source.exchangeId : randomUUID()
         if (joins) rt.forgetDelivery?.(exchangeId)
-        else if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work, authority })
+        else if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work, authority, eta: args.eta })
         try {
           await rt.deliver({ fromId: sender.id, toId: target.id, text: long.text, files: [...long.files, ...(joins ? before.files : [])], length: long.length, role: 'request', steer, exchangeId, ...(joins ? { merged: true } : {}), ...(toUser ? { audience: 'user' } : {}) })
         } catch (error) {
@@ -279,6 +283,7 @@ export function install(rt) {
           throw error
         }
         rt.noteDispatch?.(exec.agent?.id, { works: !toUser && !joins ? 1 : 0, target: target.name })
+        rt.noteEtaAction?.(exec.agent?.id, { kind: toUser ? 'user' : 'hand', target: target.name })
         const sent = toUser
           ? `Delivered to ${target.name}. It will answer the user in its own chat; nothing comes back to you, so point the user to ${target.name}'s chat instead of relaying.`
           : working && steer
@@ -363,6 +368,7 @@ export function install(rt) {
       await rt.load()
       const result = rt.keepWorking?.(exec, args.reason)
       if (result?.error !== undefined) return result.error
+      rt.noteEtaAction?.(exec.agent?.id, { kind: 'self', reason: result.kept })
       return `Recorded: "${result.kept}". This turn will not be stopped for working without handing work on.`
     },
   }))
@@ -390,6 +396,7 @@ export function install(rt) {
       }
       const why = String(args.reason ?? '').trim() || 'Stop what you are doing; the previous turn was ended on purpose. Acknowledge briefly.'
       await rt.deliver({ fromId: sender.id, toId: target.id, text: why, role: 'stopped', ...callerRoom(exec) })
+      rt.noteEtaAction?.(exec.agent?.id, { kind: 'stop', target: target.name, reason: why.slice(0, 200) })
       return `Stopped ${target.name} in ${running.map(whereOf).join(' and ')}. It is told why in a new turn, whose reply comes back to you.`
     },
   }))
@@ -406,6 +413,10 @@ export function install(rt) {
       effort: { type: 'string', description: 'Thinking level for the model, as list_bot_models shows it. Only when the user names one.' },
       work_dir: WORK_DIR_PARAM,
       avatar: AVATAR_PARAM,
+      eta: {
+        type: 'string',
+        description: 'How long you expect the job it is created for to take: "20", "20 minutes", "a few hours". Kept with the Bot and shown in the panel; the work that Bot does carries its own estimate.',
+      },
     },
     output,
     async execute(args, exec) {
@@ -425,7 +436,15 @@ export function install(rt) {
         const model = args.model || fallback
         const bot = await rt.createBot({ ...args, avatar: avatar === undefined ? undefined : { image: avatar }, model, workDir, effort: args.effort, createdBy: creator?.id })
         rt.noteDispatch?.(exec.agent?.id, { works: 0, target: bot.name })
-        return `Created ${bot.name}${workDir ? `, working in ${workDir}` : ''}. It is greeting the user now.`
+        rt.noteEtaAction?.(exec.agent?.id, { kind: 'new-bot', target: bot.name })
+        // The estimate describes the job it was created for, not the Bot's own lifetime:
+        // it stays on the record so the panel can say what was expected of it.
+        const estimate = parseEta(args.eta)
+        if (estimate !== undefined) {
+          state.bots[bot.id].eta = { ...estimate, at: Date.now() }
+          await rt.save()
+        }
+        return `Created ${bot.name}${workDir ? `, working in ${workDir}` : ''}${estimate === undefined ? '' : `, expected to take about ${estimate.minutes} min`}. It is greeting the user now.`
       } catch (error) {
         return `Could not create the Bot: ${error.message}`
       }
@@ -444,6 +463,10 @@ export function install(rt) {
       avatar: { ...AVATAR_PARAM, description: `${AVATAR_PARAM.description} An empty string removes the photo and shows the Bot's character again.` },
       model: { type: 'string', description: 'Move the Bot to another model, as provider/model or a model id' },
       effort: { type: 'string', description: 'Thinking level for the Bot\'s model, as list_bot_models shows; an empty string returns to the model\'s default' },
+      temporary: {
+        type: 'boolean',
+        description: 'Main Bot only, and only for a work that is behind its estimate: raise this Bot\'s model or thinking level for that work only. The values before are put back when the work ends, and the audit says so. Requires model or effort.',
+      },
       work_dir: { ...WORK_DIR_PARAM, description: `${WORK_DIR_PARAM.description}; an empty string returns it to the team workspace` },
     },
     output,
@@ -469,7 +492,23 @@ export function install(rt) {
         // does: setting one keeps a custom character, and clearing removes only the image.
         // They are read here, after the waits above, so a change made meanwhile stays.
         const avatar = image === undefined ? undefined : { ...rt.botOf(bot.id)?.avatar, image }
+        // A temporary raise is only for a work that is behind its estimate: without one
+        // it would silently become a permanent change of the Bot's identity.
+        const raising = args.temporary === true
+        if (raising && model === undefined && effort === undefined) return 'Pass model or effort with temporary: a temporary raise changes one of them for the work that is behind its estimate.'
+        const ladder = rt.etaTargetOf?.(exec.agent?.id, bot.id)
+        if (raising && ladder === undefined) return `Nothing ${bot.name} holds is behind its estimate right now, so there is nothing to raise it for temporarily. Change it for good, without temporary.`
+        const before = { model: bot.model, effort: bot.effort }
         const next = await rt.updateBot(bot.id, { name: newName, role, instructions, color, ...(avatar !== undefined ? { avatar } : {}), ...(model ? { model } : {}), ...(effort === undefined ? {} : { effort }), ...(moving ? { workDir: workDir ?? '' } : {}) }, self, exec.agent?.id)
+        // A raise made while a work is behind is the escalation ladder's step either
+        // way: temporary goes back when the work ends, permanent is written down as such.
+        if (ladder !== undefined && (model !== undefined || effort !== undefined)) {
+          rt.recordEscalation?.({ sessionId: exec.agent?.id, bot: next, before, after: { ...(model === undefined ? {} : { model: next.model }), ...(effort === undefined ? {} : { effort: next.effort }) }, kind: model === undefined ? 'effort' : 'model', temporary: raising })
+          const show = [model === undefined ? undefined : `model ${next.model}`, effort === undefined ? undefined : `thinking level ${next.effort || 'default'}`].filter(Boolean).join(' and ')
+          return raising
+            ? `Updated ${next.name}: ${show}. This is temporary, for the work it is behind on; it goes back to what it was when that work ends.`
+            : `Updated ${next.name}: ${show}. This one stays — the audit says it was raised for a work that was behind, so it is not put back when the work ends.`
+        }
         if (!moving) return `Updated ${next.name}.`
         const folder = workDir ?? 'the team workspace'
         return bot.id === caller.id ? `Updated ${next.name}. From your next step on, you work in ${folder}.` : `Updated ${next.name}. It now works in ${folder}.`
