@@ -90,10 +90,10 @@ function bench(t) {
 
 test('a healthy team reports zero of everything', async (t) => {
   const { rt, call } = await bench(t).start()
-  assert.deepEqual(rt.workHealth(), { stalled: 0, deliveryFailures: 0, answerFailures: 0 })
+  assert.deepEqual(rt.workHealth(), { stalled: 0, deliveryFailures: 0, answerFailures: 0, retries: 0, retryFailures: 0 })
   const answer = await call('state', {})
   assert.equal(answer.ok, true)
-  assert.deepEqual(answer.value.workHealth, { stalled: 0, deliveryFailures: 0, answerFailures: 0 })
+  assert.deepEqual(answer.value.workHealth, { stalled: 0, deliveryFailures: 0, answerFailures: 0, retries: 0, retryFailures: 0 })
 })
 
 test('the health line counts stalled work and failed answers', async (t) => {
@@ -101,7 +101,7 @@ test('the health line counts stalled work and failed answers', async (t) => {
   rt.openWork('w1', { from: 'a', to: 'b' })
   rt.sweepStalled(Date.now() + STALL_MS + 60_000)
   rt.answerMissed('w1')
-  assert.deepEqual(rt.workHealth(), { stalled: 1, deliveryFailures: 0, answerFailures: 1 })
+  assert.deepEqual(rt.workHealth(), { stalled: 1, deliveryFailures: 0, answerFailures: 1, retries: 0, retryFailures: 0 })
 })
 
 test('a delivery that failed is counted, and an old one is not news', async (t) => {

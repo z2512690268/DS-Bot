@@ -307,3 +307,53 @@ export function resumeOpen(work, at = Date.now()) {
   const resume = work.resume ?? {}
   return { attempts: resume.attempts ?? 0, gaveUp: resume.gaveUp === true, nextAt: resume.nextAt }
 }
+
+// A model call can fail for a reason that says nothing about the request: the provider
+// was overloaded, the connection dropped, the reply came back empty. Those are worth
+// another try; a refused key, an exhausted quota or a malformed request fail the same
+// way on every attempt, so retrying them only delays the news.
+export const LLM_RETRY_ATTEMPTS = 3
+export const LLM_RETRY_BASE_SECONDS = 5
+const RETRYABLE_CODES = new Set(['TRANSPORT', 'SERVER', 'RATE_LIMIT', 'TIMEOUT', 'EMPTY_RESPONSE'])
+const TERMINAL_CODES = new Set(['AUTH', 'INVALID_CREDENTIAL', 'MISSING_CREDENTIAL', 'QUOTA', 'ACCOUNT_QUOTA', 'INVALID_REQUEST', 'CONTEXT_WINDOW_EXCEEDED', 'NO_ADAPTER', 'ABORTED', 'HOSTED_ENGINE_ROUTE'])
+// pi-ai reports "servers overloaded" as PI_AI_ERROR, so the wording is the only signal
+// that it is the provider being busy rather than this request being wrong.
+const OVERLOAD = /\b(?:overload\w*|over capacity|at capacity|too many requests|temporar\w+ unavailable|service unavailable|try again|busy)\b/i
+
+/** The retry policy this team runs: the constants above, overridden by plugin config. */
+export function llmRetryOf(config = {}) {
+  const attempts = Number(config.llmRetryAttempts)
+  const base = Number(config.llmRetryBaseSeconds)
+  return {
+    attempts: Number.isFinite(attempts) && attempts >= 0 ? Math.floor(attempts) : LLM_RETRY_ATTEMPTS,
+    baseMs: Number.isFinite(base) && base >= 0 ? base * 1000 : LLM_RETRY_BASE_SECONDS * 1000,
+  }
+}
+
+// A refusal that ends the work wherever it happens: the provider will answer the same
+// way on every attempt, so the Bot that asked hears now, with the reason.
+const REPORTABLE_CODES = new Set(['AUTH', 'INVALID_CREDENTIAL', 'MISSING_CREDENTIAL', 'QUOTA', 'ACCOUNT_QUOTA', 'INVALID_REQUEST'])
+
+/** Whether a failed model request will fail the same way again, whatever the retry. */
+export function reportableFailure(failure) {
+  return REPORTABLE_CODES.has(failure?.code)
+}
+
+/** Whether a failed model request is worth another attempt. */
+export function retryableFailure(failure) {
+  const code = typeof failure?.code === 'string' ? failure.code : undefined
+  if (code === undefined) return false
+  if (TERMINAL_CODES.has(code)) return false
+  if (RETRYABLE_CODES.has(code)) return true
+  if (code === 'PI_AI_ERROR') return OVERLOAD.test(String(failure?.message ?? ''))
+  return false
+}
+
+/**
+ * How long to wait before attempt `attempt` (1 is the first): 1x, 3x, 9x the base with
+ * ten percent jitter, so a team of Bots does not come back in lockstep.
+ */
+export function retryDelayOf(attempt, baseMs, random = Math.random) {
+  const exponent = Math.max(0, Math.floor(attempt) - 1)
+  return Math.round(Math.min(baseMs * 3 ** exponent, Number.MAX_SAFE_INTEGER) * (0.9 + 0.2 * random()))
+}

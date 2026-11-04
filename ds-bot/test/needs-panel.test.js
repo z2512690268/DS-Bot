@@ -424,3 +424,10 @@ test('the running line reads the same in both cases', () => {
   assert.equal(runningLineOf({ minutes: 10, elapsedMs: 5 * 60_000 }), 'Est. 10m · in 5m')
   assert.equal(runningLineOf({ elapsedMs: 12_000 }), 'No estimate · in 12s')
 })
+
+test('the health line counts retries the team had to make, and what they did not save', () => {
+  assert.equal(healthLineOf({ retries: 2, retryFailures: 1, stalled: 0, deliveryFailures: 0, answerFailures: 0 }),
+    '2 retries · 1 failed after retries')
+  assert.equal(healthLineOf({ retries: 1, retryFailures: 0, stalled: 0, deliveryFailures: 0, answerFailures: 0 }), '1 retry')
+  assert.equal(healthLineOf({ retries: 0, retryFailures: 0, stalled: 0, deliveryFailures: 0, answerFailures: 0 }), undefined)
+})
