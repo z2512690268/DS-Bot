@@ -984,14 +984,31 @@ export function install(rt) {
   }
 
   // What the Bot that handed the work on did about a reminder, kept for the audit: the
-  // rung it took, and whether it went sideways instead of up.
+  // rung it took, and whether it went sideways instead of up. A second action soon after
+  // — stop the Bot, then hand the work to someone else — is the same story, so it is
+  // recorded against the same work as a follow-up rather than as an unrelated move.
+  const ETA_FOLLOW_MS = 10 * 60_000
   function noteEtaAction(sessionId, action = {}) {
     const list = etaPending.get(sessionId)
     if (list === undefined || list.length === 0) return undefined
+    const now = Date.now()
+    // A reminder acted on long ago is not the one this action answers.
+    for (let at = list.length - 1; at >= 0; at--) {
+      if (list[at].actedAt !== undefined && now - list[at].actedAt > ETA_FOLLOW_MS) list.splice(at, 1)
+    }
+    if (list.length === 0) {
+      etaPending.delete(sessionId)
+      return undefined
+    }
     const target = action.target
     let index = target === undefined ? list.length - 1 : list.findIndex(entry => nameOf(works()[entry.work]?.to) === target)
     if (index < 0) index = list.length - 1
-    const pending = list.splice(index, 1)[0]
+    const pending = list[index]
+    const followUp = pending.actedAt !== undefined
+    // The first action keeps the reminder pending for one follow-up; that follow-up
+    // closes it. Nothing else is attributed to it.
+    if (!followUp) pending.actedAt = now
+    else list.splice(index, 1)
     if (list.length === 0) etaPending.delete(sessionId)
     const work = works()[pending.work]
     const holder = nameOf(work?.to)
@@ -1000,6 +1017,7 @@ export function install(rt) {
       work: pending.work,
       stage: pending.stage,
       kind,
+      ...(followUp ? { followUp: true, after: pending.firstKind } : {}),
       ...(action.target === undefined ? {} : { target: action.target }),
       ...(action.reason === undefined ? {} : { reason: action.reason }),
       ...(kind === 'hand' && target !== undefined && target !== holder ? { ladder: 'horizontal', nonDefault: true } : {}),
@@ -1008,6 +1026,7 @@ export function install(rt) {
       ...(kind === 'stop' ? { ladder: 'stop' } : {}),
       ...(kind === 'self' ? { ladder: 'self' } : {}),
     }
+    if (!followUp) pending.firstKind = kind
     recordEta(record)
     if (work !== undefined) {
       pushHistory(work, { at: record.at, event: 'eta-action', kind, ...(record.target === undefined ? {} : { target: record.target }) })

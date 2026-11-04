@@ -308,3 +308,27 @@ test('a raise made without temporary is recorded as permanent and is not put bac
   assert.equal(rt.state.bots.b.effort, 'medium', 'a permanent raise is not undone')
   assert.equal(rt.etaAudit().some(entry => entry.kind === 'restore'), false)
 })
+
+test('stopping the Bot and handing the work on read as one action in the audit', async (t) => {
+  const { rt, tool } = await bench(t).start()
+  rt.openWork('w1', { from: 'a', to: 'b', eta: '10 minutes' })
+  rt.sweepStalled(Date.now() + 9 * 60_000)
+  await settle()
+  // Writer has a turn running, so it can be stopped.
+  rt.live.set('b', { turn: { info: undefined }, since: Date.now() })
+  const stopped = await tool('stop_bot', { bot: 'Writer', reason: 'Behind its estimate; take a break.' }, 'a')
+  assert.match(stopped, /Stopped Writer/)
+  rt.live.delete('b')
+  // The same turn hands the work to someone else.
+  await tool('message_bot', { to: 'Researcher', message: 'Take this over from Writer.' }, 'a')
+  const audit = rt.etaAudit()
+  const stop = audit.find(entry => entry.kind === 'stop')
+  assert.equal(stop.target, 'Writer')
+  assert.match(stop.reason, /Behind its estimate/)
+  const hand = audit.find(entry => entry.kind === 'hand')
+  assert.equal(hand.work, 'w1')
+  assert.equal(hand.target, 'Researcher')
+  assert.equal(hand.followUp, true)
+  assert.equal(hand.after, 'stop')
+  assert.equal(hand.nonDefault, true)
+})
