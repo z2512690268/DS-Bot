@@ -10117,6 +10117,8 @@ function healthLineOf(health) {
   if (health.deliveryFailures > 0) parts.push(zh() ? `${health.deliveryFailures} 次投递失败` : `${health.deliveryFailures} failed ${health.deliveryFailures === 1 ? "delivery" : "deliveries"}`);
   if (health.answerFailures > 0) parts.push(zh() ? `${health.answerFailures} 次回答失败` : `${health.answerFailures} failed ${health.answerFailures === 1 ? "answer" : "answers"}`);
   if (health.stalled > 0) parts.push(zh() ? `${health.stalled} 件停滞` : `${health.stalled} stalled`);
+  if (health.retries > 0) parts.push(zh() ? `重试 ${health.retries} 次` : `${health.retries} ${health.retries === 1 ? "retry" : "retries"}`);
+  if (health.retryFailures > 0) parts.push(zh() ? `重试后仍失败 ${health.retryFailures} 次` : `${health.retryFailures} failed after retries`);
   return parts.length === 0 ? void 0 : parts.join(" · ");
 }
 function shortDuration(ms) {
