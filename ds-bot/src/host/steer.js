@@ -225,6 +225,8 @@ export function install(rt) {
       liveJobs.set(jobId, {
         id: jobId,
         sessionId,
+        // The turn that started it: a report can only hold on to jobs from its own turn.
+        turn: rt.live?.get(sessionId)?.turn,
         startedAt,
         lastActivityAt: startedAt,
         ...(typeof event.data.kind === 'string' ? { kind: event.data.kind } : {}),
@@ -233,7 +235,19 @@ export function install(rt) {
       })
       return
     }
+    const job = liveJobs.get(jobId)
     liveJobs.delete(jobId)
+    if (job === undefined) return
+    // The files the job wrote, read before the registry drops it: the wake names them.
+    let spillPaths
+    try {
+      spillPaths = jobs?.get?.(jobId, sessionId)?.output?.spillPaths
+    } catch { spillPaths = undefined }
+    rt.jobEnded?.({
+      ...job,
+      status: event.data?.status,
+      ...(Array.isArray(spillPaths) && spillPaths.length > 0 ? { spillPaths } : {}),
+    })
   }
 
   // Reads what each live job has written since the last look: growth is activity, and a
@@ -324,4 +338,12 @@ export function install(rt) {
   })
   rt.sampleJobs = sampleJobs
   rt.liveJobsOf = liveJobsOf
+  // A wake for a work whose background job just ended: a job notice the chat renders as
+  // one, delivered to the Session the job ran in, and only ever once.
+  rt.wakeJobNotice = (sessionId, jobId, text) => {
+    const agent = liveAgent(sessionId)
+    if (agent === undefined || typeof agent.followup !== 'function') return false
+    agent.followup(noticeOf('job', jobId, text))
+    return true
+  }
 }

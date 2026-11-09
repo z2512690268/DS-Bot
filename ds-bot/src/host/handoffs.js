@@ -675,11 +675,29 @@ export function install(rt) {
   // A report the Bot that answers a work makes about it: what it concluded, and what a
   // user would have to do. The state is the Bot's judgement; the work itself stays the
   // fact, so a report never closes it — the answer that ends the turn does.
-  function reportOn(id, input) {
+  function reportOn(id, input, exec) {
     const work = works()[id]
     if (work === undefined) return { error: 'This turn is not answering a request, so there is no work to report on.' }
     const { report, error } = normalizeReport(input)
     if (error !== undefined) return { error }
+    // A ready report is not final while the Bot still has a background job of this very
+    // turn running: the answer cannot be read yet, and its end is the only thing that
+    // would bring the Bot back. The report is held and the work stays open.
+    const sessionId = exec?.agent?.id
+    const running = report.state === 'ready' && sessionId !== undefined
+      ? (rt.liveJobsOf?.(work.to) ?? []).filter(job => job.sessionId === sessionId
+        && job.turn !== undefined && job.turn === rt.live?.get(sessionId)?.turn)
+      : []
+    if (running.length > 0) {
+      work.heldReport = report
+      work.awaitingJobs = running.map(job => job.id)
+      work.report = { state: 'progress', summary: 'waiting for its background job to finish', at: report.at }
+      work.lease = { at: report.at, by: work.to }
+      delete work.stalled
+      pushHistory(work, { at: report.at, event: 'held', jobs: work.awaitingJobs })
+      save()
+      return { report: work.report, held: running.map(job => job.id) }
+    }
     // A work that goes on into another Bot's work does not end here: its report has to
     // say what happens next and who does it, or it reads as finished and the chain stops.
     const chained = work.parent !== undefined && works()[work.parent] !== undefined
@@ -703,6 +721,57 @@ export function install(rt) {
     pushHistory(work, { at: report.at, event: report.state, ...(report.summary === undefined ? {} : { summary: report.summary }) })
     save()
     return { report }
+  }
+
+  // A held work whose last background job has ended: deliver one notice naming the job
+  // and where its output is, so the Bot reads the result and reports again. It never
+  // re-sends a message that is already waiting; the notice itself is the news.
+  function flushWake(id) {
+    const work = works()[id]
+    const wake = work?.wake
+    if (wake === undefined) return false
+    const label = typeof wake.label === 'string' && wake.label !== '' ? ` (${wake.label.slice(0, 120)})` : ''
+    const files = Array.isArray(wake.spillPaths) && wake.spillPaths.length > 0 ? `\nOutput files: ${wake.spillPaths.join(', ')}` : ''
+    const text = `[background job ${wake.jobId}${label} finished]\nIt is the job you left running on this work. Read its result with job_output, then report this work again.${files}`
+    let sent = false
+    try {
+      sent = rt.wakeJobNotice?.(wake.sessionId, wake.jobId, text) === true
+    } catch (error) {
+      rt.warn('ds-bot: the job %s end was not announced for work %s: %s', wake.jobId, id, error)
+      return false
+    }
+    // No Session to wake yet: keep the wake for the sweep instead of losing it.
+    if (!sent) return false
+    delete work.wake
+    save()
+    return true
+  }
+
+  // Job lifecycle from steer.js: a work held for its Bot's background job keeps waiting
+  // until the last of those jobs has ended; then one wake is queued.
+  function jobEnded(job) {
+    if (job?.id === undefined) return
+    const botId = rt.selfOf?.(job.sessionId)
+    let changed = false
+    for (const work of Object.values(works())) {
+      if (botId !== undefined && work.to !== botId) continue
+      if (!Array.isArray(work.awaitingJobs) || !work.awaitingJobs.includes(job.id)) continue
+      work.awaitingJobs = work.awaitingJobs.filter(other => other !== job.id)
+      changed = true
+      if (work.awaitingJobs.length > 0) continue
+      delete work.awaitingJobs
+      work.wake = {
+        jobId: job.id,
+        sessionId: job.sessionId,
+        ...(typeof job.label === 'string' ? { label: job.label } : {}),
+        ...(Array.isArray(job.spillPaths) && job.spillPaths.length > 0 ? { spillPaths: job.spillPaths } : {}),
+        at: Date.now(),
+      }
+      pushHistory(work, { at: Date.now(), event: 'job-ended', jobId: job.id })
+      delete work.heldReport
+    }
+    if (changed) save()
+    for (const [id, work] of Object.entries(works())) if (work.wake !== undefined) flushWake(id)
   }
 
   // The state of one work by id, for the tools and the panel.
@@ -1194,6 +1263,7 @@ export function install(rt) {
     // one that is still writing is making progress, not stalling.
     rt.sampleJobs?.(at)
     let changed = false
+    for (const [id, work] of Object.entries(works())) if (work.wake !== undefined) flushWake(id)
     for (const [id, work] of Object.entries(works())) {
       // A stall the user already dismissed needs no place in the team file: its row is
       // hidden for good, so the sweep clears it. One that handed on work of its own is
@@ -1373,5 +1443,5 @@ export function install(rt) {
     return () => clearInterval(timer)
   }, 'ds-bot: nudge a chain that stopped')
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, sweepStalled, sweepResume, resumePolicy, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, recordProposal, approveProposal, noteWorkTurn, noteFault, workStats, workHistory, workHealth, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, replyDelivery, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork, runningWorks, noteEtaAction, recordEscalation, etaTargetOf, etaAdvice: id => escalationAdvice(works()[id]), etaAudit: () => etaAuditLog(), resumeAudit: () => resumeLog(), noteWorkHalt, failWorkOf })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, reportWork: reportOn, jobEnded, flushWake, sweepStalled, sweepResume, resumePolicy, leasePolicy, proactive, proposeWork: propose, workAuthorityOf, proposalRefusal, recordProposal, approveProposal, noteWorkTurn, noteFault, workStats, workHistory, workHealth, activeTurns, needsYou, dismissNeeds, workState, workStateOf, workAsker: askedBy, answerText, replyDelivery, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork, runningWorks, noteEtaAction, recordEscalation, etaTargetOf, etaAdvice: id => escalationAdvice(works()[id]), etaAudit: () => etaAuditLog(), resumeAudit: () => resumeLog(), noteWorkHalt, failWorkOf })
 }

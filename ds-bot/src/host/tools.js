@@ -337,8 +337,14 @@ export function install(rt) {
       if (sender === undefined) return 'Only Bots on the team can report.'
       const work = worksOf(exec).find(id => rt.ownsWork(sender.id, id))
       if (work === undefined) return 'Nothing to report: this turn is not answering a request another Bot made. Answer as usual.'
-      const { report, error } = rt.reportWork(work, args)
+      const { report, error, held } = rt.reportWork(work, args, exec)
       if (error !== undefined) refuse(error)
+      // A ready report held for the Bot's own running job: the work stays open, and the
+      // job's end brings the Bot back to read the result.
+      if (Array.isArray(held) && held.length > 0) {
+        const jobs = held.join(', ')
+        return `Not final yet: your background job${held.length > 1 ? 's' : ''} ${jobs} still ${held.length > 1 ? 'are' : 'is'} running, so this work stays open as in progress. You will be woken when ${held.length > 1 ? 'they end' : 'it ends'}; read the result then and report again.`
+      }
       const said = report.summary ? `: ${report.summary}` : ''
       if (report.state === 'progress') return `Recorded progress${said}. It stays out of your answer; go on with the work.`
       return `Recorded ${report.state}${said}. It goes to the Bot that asked with your answer; when you end this turn, that is what it reads first.`
