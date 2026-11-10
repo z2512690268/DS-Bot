@@ -161,6 +161,9 @@ export function install(rt) {
       return id
     },
   })
+  // The tools module scoped the live Bot Sessions before this plugin mounted, so the
+  // browser tools reach those Sessions only through one more sync afterwards.
+  void Promise.resolve(rt.load?.()).then(() => rt.syncScopedTools?.(), () => {})
   // A deleted Bot leaves no browser state behind: close its session and drop the profile dir.
   if (typeof rt.deleteBot === 'function') {
     const originalDelete = rt.deleteBot.bind(rt)
